@@ -1,0 +1,32 @@
+/* static/css/settings.css */
+
+.settings-tabs {
+    border-bottom: 1px solid var(--border-color);
+}
+.settings-tabs .nav-link {
+    color: var(--text-muted);
+    font-weight: 500;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    /* 缩小上下边距，使头部更紧凑 */
+    padding: 8px 16px;
+    background: transparent;
+    transition: all 0.2s;
+    font-size: 14px;
+}
+.settings-tabs .nav-link:hover {
+    color: var(--text-main);
+}
+.settings-tabs .nav-link.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    font-weight: 600;
+}
+
+.badge-soft-status {
+    padding: 4px 8px;
+    font-weight: 500;
+    border-radius: 4px;
+    font-size: 12px;
+}

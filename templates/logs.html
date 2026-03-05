@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+
+{% block styles %}
+<style>
+/* 原生经典虚线树状图 CSS */
+.log-tree { list-style: none; padding: 0; margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+.tree-folder { margin-bottom: 6px; }
+.tree-folder-header { cursor: pointer; display: flex; align-items: center; padding: 4px 8px; border-radius: 4px; color: var(--text-main); font-size: 14px; transition: background 0.2s; }
+.tree-folder-header:hover { background-color: var(--bg-body); }
+.tree-folder-header i { font-size: 14px; margin-right: 8px; color: #64748B; }
+
+.tree-files { list-style: none; padding: 0 0 0 12px; margin: 0; position: relative; }
+/* 绘制贯穿文件的垂直虚线 */
+.tree-files::before { content: ''; position: absolute; top: 0; bottom: 14px; left: 14px; border-left: 1px dashed #CBD5E1; }
+
+.tree-file { position: relative; padding: 2px 0 2px 14px; }
+/* 绘制指向文件的水平虚线 */
+.tree-file::before { content: ''; position: absolute; top: 16px; left: 2px; width: 10px; border-top: 1px dashed #CBD5E1; }
+
+.tree-file a { display: flex; align-items: center; text-decoration: none; color: var(--text-muted); font-size: 13px; padding: 6px 8px; border-radius: 4px; transition: all 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-file a:hover { background-color: #F1F5F9; color: var(--text-main); }
+.tree-file a.active { background-color: #E0F2FE; color: #0284C7; font-weight: 600; }
+
+html.dark-theme .tree-folder-header:hover { background-color: #0F172A; }
+html.dark-theme .tree-files::before, html.dark-theme .tree-file::before { border-color: #475569; }
+html.dark-theme .tree-file a:hover { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1); color: #38BDF8; }
+
+/* 纯净白底日志块 */
+.log-content-pre { background-color: #FFFFFF; color: #334155; border: none; }
+html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="fw-bold mb-0">系统日志</h5>
+</div>
+
+<div class="row g-3 h-100" style="min-height: 70vh;">
+    <!-- 左侧日志树：固定宽度 220px，紧凑清爽 -->
+    <div class="col-md-auto" style="width: 220px;">
+        <div class="card border-0 h-100">
+            <div class="card-header bg-white border-bottom"><h6 class="mb-0 fw-bold"><i class="bi bi-folder2-open me-2"></i>日志目录</h6></div>
+            <div class="card-body p-2" style="overflow-y: auto; max-height: 65vh;">
+                <ul class="log-tree">
+                    {% for folder, files in tree.items() %}
+                    <li class="tree-folder">
+                        <div class="tree-folder-header" onclick="toggleTree(this)">
+                            <!-- 根据展开状态渲染 [+] 或 [-] -->
+                            <i class="bi {% if current_folder == folder %}bi-dash-square{% else %}bi-plus-square{% endif %}"></i>
+                            <span class="folder-name">{{ folder }}</span>
+                        </div>
+                        <ul class="tree-files" style="display: {% if current_folder == folder %}block{% else %}none{% endif %};">
+                            {% for f in files %}
+                            <li class="tree-file">
+                                <a href="/logs?folder={{ folder }}&file={{ f }}" class="{% if current_file == f %}active{% endif %}">
+                                    <i class="bi bi-file-earmark-text text-muted me-2"></i>{{ f }}
+                                </a>
+                            </li>
+                            {% endfor %}
+                            {% if not files %}
+                            <li class="tree-file"><span class="text-muted small ms-2">空文件夹</span></li>
+                            {% endif %}
+                        </ul>
+                    </li>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">暂无任何日志</div>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧内容展示：移除暗色背景，适配全局主题 -->
+    <div class="col d-flex flex-column" style="min-width: 0;">
+        <div class="card border-0 flex-grow-1">
+            <div class="card-header bg-light border-bottom">
+                <h6 class="mb-0 fw-medium font-monospace text-secondary" style="font-size: 13px;">
+                    <i class="bi bi-terminal-fill me-2 text-primary"></i>
+                    {% if current_file %}
+                        /data/logs/{{ current_folder }}/{{ current_file }}
+                    {% else %}
+                        Select a log file to view...
+                    {% endif %}
+                </h6>
+            </div>
+            <!-- 去除了原有的 bg-dark 类 -->
+            <div class="card-body p-0 position-relative bg-transparent" style="border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; overflow:hidden;">
+                <!-- 加入了 log-content-pre 类去控制纯白底色黑字 -->
+                <pre class="m-0 p-3 h-100 font-monospace log-content-pre" style="overflow-y: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.6; min-height: 600px;">{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // 树状图展开折叠与图标切换逻辑
+    function toggleTree(element) {
+        const icon = element.querySelector('i.bi');
+        const childUl = element.nextElementSibling;
+        if (childUl.style.display === 'none') {
+            childUl.style.display = 'block';
+            icon.classList.remove('bi-plus-square');
+            icon.classList.add('bi-dash-square');
+        } else {
+            childUl.style.display = 'none';
+            icon.classList.remove('bi-dash-square');
+            icon.classList.add('bi-plus-square');
+        }
+    }
+</script>
+{% endblock %}

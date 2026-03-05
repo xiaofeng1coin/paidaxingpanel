@@ -1,0 +1,8 @@
+.terminal-window { background: #FFFFFF !important; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+.terminal-header { background: #F1F5F9 !important; border-bottom: 1px solid var(--border-color); padding: 10px 16px; border-radius: 8px 8px 0 0; }
+#log-container { background: #FFFFFF !important; color: #334155 !important; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.6; }
+
+.folder-header { font-weight: 600; font-size: 12px; color: #475569; padding: 8px 12px; background: #F8FAFC; border-radius: 6px; margin-top: 8px; }
+.file-list-item { border: none; border-radius: 6px; margin-bottom: 2px; padding: 6px 12px 6px 24px; font-size: 13px; color: var(--text-muted); transition: background 0.1s; text-decoration: none; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-list-item:hover { background: #F1F5F9; color: var(--text-main); }
+.file-list-item.active { background: #E0F2FE; color: #0284C7; font-weight: 600; }

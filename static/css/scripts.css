@@ -1,0 +1,12 @@
+.editor-wrapper { background: #FFFFFF; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
+.code-textarea { background: transparent !important; color: #334155 !important; font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important; font-size: 14px; line-height: 1.6; border: none !important; resize: none; padding: 16px; }
+.code-textarea:focus { box-shadow: none !important; outline: none !important; }
+
+.file-list-item { border: none; border-radius: 6px; margin-bottom: 2px; padding: 8px 12px; font-size: 13px; color: var(--text-muted); transition: background 0.1s; text-decoration: none; display: block; }
+.file-list-item:hover { background: #F1F5F9; color: var(--text-main); }
+.file-list-item.active { background: #E0F2FE; color: #0284C7; font-weight: 600; }
+
+.scripts-container { height: calc(100vh - 48px); }
+@media (max-width: 768px) { .scripts-container { height: calc(100vh - 32px); } }
+
+.syntax-badge { padding: 4px 8px; font-size: 12px; font-weight: 500; border-radius: 4px; display: inline-flex; align-items: center; max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>调试模式 - {{ current_file }}</title>
+    <!-- 引入基础框架和图标 -->
+    <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
+    <!-- 引入独立抽离的调试页面专属样式 -->
+    <link href="{{ url_for('static', filename='css/debug.css') }}" rel="stylesheet">
+
+    <!-- 注入系统亮暗主题自适应逻辑 -->
+    <script>
+        (function() {
+            const theme = "{{ sys_theme }}";
+            function setDark(isDark) {
+                if (isDark) document.documentElement.classList.add('dark-theme');
+                else document.documentElement.classList.remove('dark-theme');
+            }
+            if (theme === 'dark') { setDark(true); }
+            else if (theme === 'light') { setDark(false); }
+            else {
+                const mq = window.matchMedia('(prefers-color-scheme: dark)');
+                setDark(mq.matches);
+                mq.addEventListener('change', e => setDark(e.matches));
+            }
+        })();
+    </script>
+</head>
+<body>
+
+    <!-- 顶部控制栏 -->
+    <div class="debug-toolbar">
+        <!-- 文件下拉框切换 -->
+        <select class="form-select" style="width: 220px; font-size: 14px; height: 32px; padding-top: 2px; padding-bottom: 2px;" onchange="window.location.href='/scripts/debug?file='+this.value">
+            {% for f in files %}
+            <option value="{{ f }}" {% if f == current_file %}selected{% endif %}>{{ f }}</option>
+            {% endfor %}
+        </select>
+
+        <!-- 核心操作按钮 -->
+        <button class="btn-toolbar" id="runBtn" onclick="runDebugScript()">运行</button>
+        <button class="btn-toolbar" onclick="clearLog()">清空日志</button>
+        <button class="btn-toolbar" onclick="saveDebugScript()">保存</button>
+        <a href="/scripts?file={{ current_file }}" class="btn-toolbar">退出</a>
+    </div>
+
+    <!-- 左右分屏主体 -->
+    <div class="debug-main">
+        <!-- 左侧：代码编辑器区 -->
+        <div class="editor-container">
+            <div id="monaco-editor" style="width: 100%; height: 100%;"></div>
+            <form id="saveForm" method="POST" action="/scripts/debug?file={{ current_file }}" style="display:none;">
+                <textarea name="content" id="hiddenContent"></textarea>
+            </form>
+        </div>
+
+        <!-- 右侧：控制台日志输出区 -->
+        <div class="log-container">
+            <pre class="log-content" id="logContainer">等待执行指令...</pre>
+        </div>
+    </div>
+
+    <!-- 用于安全传递代码内容的隐藏容器 -->
+    <script id="raw-script-content" type="application/json">
+        {{ content | tojson | safe }}
+    </script>
+
+    <!-- 引入本地静态化核心脚本 -->
+    <script src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/monaco-editor/min/vs/loader.js') }}"></script>
+
+    <script>
+        require.config({ paths: { 'vs': "{{ url_for('static', filename='vendor/monaco-editor/min/vs') }}" }});
+        let editor;
+
+        // 根据文件后缀自动决定编辑器语言高亮，无需前端手动选择
+        let lang = 'plaintext';
+        const filename = "{{ current_file }}";
+        if(filename.endsWith('.js')) lang = 'javascript';
+        else if(filename.endsWith('.py')) lang = 'python';
+        else if(filename.endsWith('.sh')) lang = 'shell';
+        else if(filename.endsWith('.json')) lang = 'json';
+
+        const safeContent = JSON.parse(document.getElementById('raw-script-content').textContent);
+
+        // 初始化编辑器
+        require(['vs/editor/editor.main'], function () {
+            const theme = document.documentElement.classList.contains('dark-theme') ? 'vs-dark' : 'vs';
+            editor = monaco.editor.create(document.getElementById('monaco-editor'), {
+                value: safeContent,
+                language: lang,
+                theme: theme,
+                automaticLayout: true,
+                fontSize: 14,
+                minimap: { enabled: false }, // 禁用缩略图，视野更宽阔
+                wordWrap: "on",
+                scrollBeyondLastLine: false,
+                roundedSelection: false,
+                padding: { top: 16 }
+            });
+        });
+
+        // 保存代码
+        function saveDebugScript() {
+            if(!editor) return;
+            document.getElementById('hiddenContent').value = editor.getValue();
+            document.getElementById('saveForm').submit();
+        }
+
+        // 清空日志框
+        function clearLog() {
+            document.getElementById('logContainer').innerText = '';
+        }
+
+        // 过滤系统终端颜色字符
+        function cleanTerminalOutput(text) {
+            return text ? text.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '') : "";
+        }
+
+        // 运行调试指令
+        let currentStreamId = null;
+        function runDebugScript() {
+            const btn = document.getElementById('runBtn');
+            btn.disabled = true;
+            btn.innerText = '运行中...';
+
+            const logContainer = document.getElementById('logContainer');
+            logContainer.innerHTML = '<span style="color:#2563EB; font-weight:bold;">[System]</span> 正在建立调试通道并下发指令...\n';
+
+            const fd = new FormData();
+            fd.append('filename', filename);
+
+            fetch('/api/scripts/debug_run', {
+                method: 'POST',
+                body: fd
+            }).then(res => res.json()).then(data => {
+                if(data.status === 'success') {
+                    currentStreamId = data.stream_id;
+                } else {
+                    logContainer.innerText = '后端拒绝了请求或任务创建失败！';
+                    btn.disabled = false;
+                    btn.innerText = '运行';
+                }
+            }).catch(() => {
+                logContainer.innerText = '网络连接错误，无法发起请求！';
+                btn.disabled = false;
+                btn.innerText = '运行';
+            });
+        }
+
+        // 实时接收流式日志并自动滚到底部
+        const socket = io();
+        socket.on('log_stream', function(msg) {
+            if (msg.task_id === currentStreamId) {
+                const logContainer = document.getElementById('logContainer');
+
+                if (msg.clear) logContainer.textContent = '';
+                logContainer.textContent += cleanTerminalOutput(msg.data);
+                logContainer.scrollTop = logContainer.scrollHeight;
+
+                if (msg.data.includes('调试执行结束') || msg.data.includes('调试出错') || msg.data.includes('已被系统强制终止')) {
+                    const btn = document.getElementById('runBtn');
+                    btn.disabled = false;
+                    btn.innerText = '运行';
+                }
+            }
+        });
+    </script>
+</body>
+</html>

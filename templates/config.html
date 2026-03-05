@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/config.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h5 class="fw-bold mb-1">配置文件 (config.sh)</h5>
+        <span class="text-muted small">系统会在执行脚本前自动解析该文件内的 export 命令，将值注入到运行环境中。</span>
+    </div>
+    <!-- 按钮已挪到此处，利用 HTML5 的 form 属性绑定底部的表单 -->
+    <button type="submit" form="configForm" class="btn btn-primary shadow-sm" style="width: 140px;"><i class="bi bi-floppy me-2"></i>保存配置</button>
+</div>
+
+<!-- 给 form 设置了 id，并且移除了内层的多余 div 间距 -->
+<form id="configForm" method="POST" action="/config" class="d-flex flex-column" style="height: calc(100vh - 120px);">
+    <div class="editor-wrapper flex-grow-1 mb-0">
+        <textarea name="config_content" class="form-control code-textarea h-100 w-100" spellcheck="false" placeholder="# 输入您的全局配置...">{{ config_content }}</textarea>
+    </div>
+</form>
+{% endblock %}

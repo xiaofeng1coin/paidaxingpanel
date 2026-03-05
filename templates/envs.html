@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/envs.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="fw-bold mb-0">环境变量</h5>
+    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addEnvModal"><i class="bi bi-plus-lg me-1"></i>新建变量</button>
+</div>
+
+<div class="card border-0">
+    <div class="card-body p-0">
+        <div class="table-responsive" style="overflow: visible;">
+            <table class="table ant-table align-middle" id="envTable">
+                <thead>
+                    <tr>
+                        <!-- 固定宽度的列 -->
+                        <th style="width: 50px;"><input type="checkbox" class="form-check-input"></th>
+                        <th style="width: 70px;">序号</th>
+                        <!-- 弹性的列 -->
+                        <th style="width: 20%;">名称</th>
+                        <!-- 不设宽度，自动霸占所有剩余的超大空间 -->
+                        <th style="width: auto;">值</th>
+                        <th style="width: 15%;">备注</th>
+                        <!-- 固定宽度的列，防止时间字符串被挤换行 -->
+                        <th style="width: 160px;">更新时间</th>
+                        <th style="width: 90px;">状态</th>
+                        <th style="width: 130px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="envTbody">
+                    {% for env in envs %}
+                    <tr class="draggable-row {% if env.is_disabled == 1 %}row-disabled{% endif %}" data-id="{{ env.id }}" draggable="true">
+                        <td><input type="checkbox" class="form-check-input"></td>
+                        <td class="text-muted row-index fw-bold" style="cursor: grab;">{{ loop.index }}</td>
+
+                        <!-- 加入 env-name-cell 防止名字过长撑爆 -->
+                        <td class="font-monospace fw-medium text-dark env-name-cell" title="{{ env.name }}">{{ env.name }}</td>
+
+                        <!-- 值列彻底释放，跟随表头自适应 -->
+                        <td class="font-monospace env-value-cell" title="{{ env.value }}">{{ env.value }}</td>
+
+                        <!-- 加入 env-remark-cell 防止备注过长撑爆 -->
+                        <td class="text-muted env-remark-cell" title="{{ env.remarks }}">{{ env.remarks }}</td>
+
+                        <td class="text-muted" style="font-size: 13px;">{{ env.updated_at if env.updated_at else '-' }}</td>
+                        <td>
+                            {% if env.is_disabled == 1 %}
+                                <span class="ant-tag ant-tag-error">已禁用</span>
+                            {% else %}
+                                <span class="ant-tag ant-tag-success">已启用</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="d-flex align-items-center justify-content-center gap-2">
+                                <button class="action-icon-btn" data-bs-toggle="tooltip" title="编辑" onclick='openEditEnvModal({{ env.id }}, {{ env.name | tojson }}, {{ env.value | tojson }}, {{ env.remarks | tojson }})'><i class="bi bi-pencil"></i></button>
+                                <a href="/api/env/toggle/{{ env.id }}" class="action-icon-btn" data-bs-toggle="tooltip" title="{% if env.is_disabled == 1 %}启用{% else %}禁用{% endif %}"><i class="bi bi-slash-circle"></i></a>
+                                <a href="/env/delete/{{ env.id }}" class="action-icon-btn text-danger-hover" data-bs-toggle="tooltip" title="删除" onclick="return confirm('确定删除吗？')"><i class="bi bi-trash"></i></a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="8" class="text-center py-5 text-muted">暂无环境变量数据</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 新建变量 Modal -->
+<div class="modal fade" id="addEnvModal" tabindex="-1">
+    <div class="modal-dialog"><form class="modal-content" method="POST" action="/envs">
+        <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">新建环境变量</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body p-4">
+            <div class="mb-3"><label class="form-label text-muted small fw-medium">变量名称</label><input type="text" name="name" class="form-control font-monospace" required></div>
+            <div class="mb-3"><label class="form-label text-muted small fw-medium">变量值</label><textarea name="value" class="form-control font-monospace" rows="4" required></textarea></div>
+            <div class="mb-2"><label class="form-label text-muted small fw-medium">备注 (选填)</label><input type="text" name="remarks" class="form-control"></div>
+        </div>
+        <div class="modal-footer bg-light"><button type="button" class="btn btn-light border" data-bs-dismiss="modal">取消</button><button type="submit" class="btn btn-primary" style="width: 80px;">确定</button></div>
+    </form></div>
+</div>
+
+<!-- 编辑变量 Modal -->
+<div class="modal fade" id="editEnvModal" tabindex="-1">
+    <div class="modal-dialog"><form class="modal-content" id="editEnvForm" method="POST">
+        <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">编辑环境变量</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body p-4">
+            <div class="mb-3"><label class="form-label text-muted small fw-medium">变量名称</label><input type="text" id="edit_env_name" name="name" class="form-control font-monospace" required></div>
+            <div class="mb-3"><label class="form-label text-muted small fw-medium">变量值</label><textarea id="edit_env_value" name="value" class="form-control font-monospace" rows="4" required></textarea></div>
+            <div class="mb-2"><label class="form-label text-muted small fw-medium">备注 (选填)</label><input type="text" id="edit_env_remarks" name="remarks" class="form-control"></div>
+        </div>
+        <div class="modal-footer bg-light"><button type="button" class="btn btn-light border" data-bs-dismiss="modal">取消</button><button type="submit" class="btn btn-primary" style="width: 80px;">保存</button></div>
+    </form></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]')).map(el => new bootstrap.Tooltip(el, { trigger: 'hover' }));
+    });
+
+    let envEditModal = null;
+    document.addEventListener("DOMContentLoaded", () => { envEditModal = new bootstrap.Modal(document.getElementById('editEnvModal')); });
+
+    function openEditEnvModal(id, name, value, remarks) {
+        document.getElementById('edit_env_name').value = name;
+        document.getElementById('edit_env_value').value = value;
+        document.getElementById('edit_env_remarks').value = remarks || '';
+        document.getElementById('editEnvForm').action = `/env/edit/${id}`;
+        envEditModal.show();
+    }
+
+    // === 核心原生拖拽排序逻辑 ===
+    const tbody = document.getElementById('envTbody');
+    let draggedRow = null;
+
+    tbody.addEventListener('dragstart', function(e) {
+        if (e.target.tagName === 'TR') {
+            draggedRow = e.target;
+            e.dataTransfer.effectAllowed = 'move';
+            // 设置一点延时，防止拖拽预览图一起变透明
+            setTimeout(() => draggedRow.classList.add('dragging'), 0);
+        }
+    });
+
+    tbody.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        const targetRow = e.target.closest('tr.draggable-row');
+        if (targetRow && targetRow !== draggedRow) {
+            const bounding = targetRow.getBoundingClientRect();
+            const offset = e.clientY - bounding.top;
+            // 鼠标过了行高一半就往下挤，否则往上挤
+            if (offset > bounding.height / 2) {
+                targetRow.after(draggedRow);
+            } else {
+                targetRow.before(draggedRow);
+            }
+        }
+    });
+
+    tbody.addEventListener('dragend', function() {
+        if (draggedRow) {
+            draggedRow.classList.remove('dragging');
+            draggedRow = null;
+            updateRowIndicesAndSave();
+        }
+    });
+
+    function updateRowIndicesAndSave() {
+        const rows = tbody.querySelectorAll('tr.draggable-row');
+        const order = [];
+        // 动态修改纯前端的序号列
+        rows.forEach((row, index) => {
+            row.querySelector('.row-index').innerText = index + 1;
+            order.push(row.getAttribute('data-id'));
+        });
+
+        // 发送排序数组给后端永久保存
+        fetch('/api/env/reorder', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({order: order})
+        });
+    }
+</script>
+{% endblock %}

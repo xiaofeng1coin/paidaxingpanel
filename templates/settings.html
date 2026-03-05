@@ -1,0 +1,421 @@
+{% extends 'base.html' %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <h5 class="fw-bold mb-0">系统设置</h5>
+</div>
+
+<ul class="nav settings-tabs mb-3" id="settingsTabs">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-security">安全设置</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-notify">通知设置</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs">登录日志</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-deps">依赖设置</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-others">其他设置</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-about">关于</button></li>
+</ul>
+
+<div class="tab-content border-0 p-0 bg-transparent">
+
+    <div class="tab-pane fade show active" id="tab-security">
+        <div class="card border-0 mb-3"><div class="card-body">
+            <form method="POST" action="/settings/security">
+                <h6 class="fw-bold mb-2">修改用户名密码</h6>
+                <div class="mb-2" style="max-width: 300px;">
+                    <label class="form-label text-muted small"><span class="text-danger me-1">*</span>用户名</label>
+                    <input type="text" name="username" class="form-control" value="{{ current_user.username }}" required>
+                </div>
+                <div class="mb-3" style="max-width: 300px;">
+                    <label class="form-label text-muted small"><span class="text-danger me-1">*</span>密码</label>
+                    <input type="password" name="password" class="form-control" placeholder="不修改请留空">
+                </div>
+                <button type="submit" class="btn btn-primary mb-4" style="width: 80px;">保存</button>
+            </form>
+
+            <h6 class="fw-bold mb-2">两步验证 (2FA / TOTP)</h6>
+            <div class="d-flex align-items-center mb-4">
+                {% if config.get('totp_secret') %}
+                    <div class="bg-success bg-opacity-10 text-success px-3 py-1 rounded d-flex align-items-center fw-medium me-3 border border-success border-opacity-25" style="font-size: 13px;">
+                        <i class="bi bi-shield-check me-2 fs-5"></i>已启用保护
+                    </div>
+                    <button class="btn btn-outline-danger btn-sm" onclick="openDisable2FAModal()">停用验证</button>
+                {% else %}
+                    <div class="bg-secondary bg-opacity-10 text-secondary px-3 py-1 rounded d-flex align-items-center fw-medium me-3" style="font-size: 13px;">
+                        <i class="bi bi-shield-exclamation me-2 fs-5"></i>未启用
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openEnable2FAModal()">立即开启</button>
+                {% endif %}
+            </div>
+
+            <h6 class="fw-bold mb-2">头像</h6>
+            <div class="d-flex align-items-center gap-3">
+                <div style="width: 80px; height: 80px; background: #CBD5E1; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 5px;">
+                    <img src="/api/avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" style="width: 100%; height: 100%; object-fit: cover;">
+                    <i class="bi bi-person text-white" style="font-size: 40px; display: none;"></i>
+                </div>
+                <form id="avatarForm" action="/api/avatar/upload" method="POST" enctype="multipart/form-data" style="display: none;">
+                    <input type="file" name="file" id="avatarInput" accept="image/*" onchange="document.getElementById('avatarForm').submit();">
+                </form>
+                <button class="btn btn-light border btn-sm" onclick="document.getElementById('avatarInput').click()"><i class="bi bi-upload me-2"></i>更换头像</button>
+            </div>
+        </div></div>
+    </div>
+
+    <!-- 通知设置 -->
+    <div class="tab-pane fade" id="tab-notify">
+        <div class="card border-0 mb-3"><div class="card-body">
+            <form method="POST" action="/settings/config">
+                <input type="hidden" name="tab" value="notify">
+                <div class="mb-3" style="max-width: 300px;">
+                    <label class="form-label text-muted small"><span class="text-danger me-1">*</span>系统登录通知方式</label>
+                    <select name="notify_type" class="form-select" id="notify_type" onchange="toggleNotify()">
+                        <option value="none" {% if config.get('notify_type') == 'none' %}selected{% endif %}>已关闭</option>
+                        <option value="telegram" {% if config.get('notify_type') == 'telegram' %}selected{% endif %}>Telegram</option>
+                        <option value="dingtalk" {% if config.get('notify_type') == 'dingtalk' %}selected{% endif %}>钉钉 (DingTalk)</option>
+                        <option value="pushplus" {% if config.get('notify_type') == 'pushplus' %}selected{% endif %}>Push Plus</option>
+                        <option value="serverchan" {% if config.get('notify_type') == 'serverchan' %}selected{% endif %}>Server酱</option>
+                    </select>
+                </div>
+                <div id="notify-params" style="max-width: 300px; display: none;">
+                    <div class="mb-3 tg-param">
+                        <input type="text" name="TG_BOT_TOKEN" class="form-control mb-2" placeholder="TG_BOT_TOKEN" value="{{ config.get('TG_BOT_TOKEN', config.get('telegramBotToken', '')) }}">
+                        <input type="text" name="TG_USER_ID" class="form-control" placeholder="TG_USER_ID" value="{{ config.get('TG_USER_ID', config.get('telegramBotUserId', '')) }}">
+                    </div>
+                    <div class="mb-3 dt-param">
+                        <input type="text" name="DD_BOT_TOKEN" class="form-control mb-2" placeholder="DD_BOT_TOKEN" value="{{ config.get('DD_BOT_TOKEN', config.get('dingtalkBotToken', '')) }}">
+                        <input type="text" name="DD_BOT_SECRET" class="form-control" placeholder="DD_BOT_SECRET (选填)" value="{{ config.get('DD_BOT_SECRET', '') }}">
+                    </div>
+                    <div class="mb-3 pp-param">
+                        <input type="text" name="PUSH_PLUS_TOKEN" class="form-control" placeholder="PUSH_PLUS_TOKEN" value="{{ config.get('PUSH_PLUS_TOKEN', '') }}">
+                    </div>
+                    <div class="mb-3 sc-param">
+                        <input type="text" name="PUSH_KEY" class="form-control" placeholder="PUSH_KEY" value="{{ config.get('PUSH_KEY', '') }}">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 80px;">保存</button>
+            </form>
+        </div></div>
+    </div>
+
+    <!-- 登录日志 -->
+    <div class="tab-pane fade" id="tab-logs">
+        <div class="card border-0 mb-3"><div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead><tr><th>序号</th><th>登录时间</th><th>登录地址</th><th>登录IP</th><th>登录设备</th><th>登录状态</th></tr></thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr>
+                            <td class="text-muted fw-bold">{{ loop.index }}</td>
+                            <td class="font-monospace" style="font-size:13px;">{{ log.login_time }}</td>
+                            <td>{{ log.address }}</td>
+                            <td class="font-monospace" style="font-size:13px;">{{ log.ip }}</td>
+                            <td style="max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ log.device }}">{{ log.device }}</td>
+                            <td>
+                                {% if log.status == '成功' %}
+                                <span class="badge-soft-status" style="background:#ECFDF5;color:#059669;">成功</span>
+                                {% else %}
+                                <span class="badge-soft-status" style="background:#FEF2F2;color:#DC2626;">{{ log.status }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="text-center py-4 text-muted">暂无日志</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div></div>
+    </div>
+
+    <!-- 依赖设置 -->
+    <div class="tab-pane fade" id="tab-deps">
+        <div class="card border-0 mb-3"><div class="card-body">
+            <form method="POST" action="/settings/config">
+                <input type="hidden" name="tab" value="deps">
+                <div class="mb-3">
+                    <label class="form-label text-muted small d-flex align-items-center">代理 <i class="bi bi-question-circle ms-1" title="代理与镜像源二选一即可"></i></label>
+                    <div class="d-flex gap-2" style="max-width: 400px;">
+                        <input type="text" name="proxy" class="form-control" placeholder="http://1.1.1.1:8080" value="{{ config.get('proxy', '') }}">
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                    <span class="text-muted" style="font-size: 12px;">代理与镜像源二选一即可</span>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">Node 软件包镜像源</label>
+                    <div class="d-flex gap-2" style="max-width: 400px;">
+                        <input type="text" name="node_mirror" class="form-control" placeholder="https://registry.npmmirror.com" value="{{ config.get('node_mirror', '') }}">
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">Python 软件包镜像源</label>
+                    <div class="d-flex gap-2" style="max-width: 400px;">
+                        <input type="text" name="python_mirror" class="form-control" placeholder="https://pypi.tuna.tsinghua.edu.cn/simple" value="{{ config.get('python_mirror', '') }}">
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">Linux 软件包镜像源</label>
+                    <div class="d-flex gap-2" style="max-width: 400px;">
+                        <input type="text" name="linux_mirror" class="form-control" placeholder="https://mirrors.aliyun.com" value="{{ config.get('linux_mirror', '') }}">
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                </div>
+            </form>
+        </div></div>
+    </div>
+
+    <!-- 其他设置 -->
+    <div class="tab-pane fade" id="tab-others">
+        <div class="card border-0 mb-3"><div class="card-body">
+            <form method="POST" action="/settings/config" class="mb-3">
+                <input type="hidden" name="tab" value="others">
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">主题</label>
+                    <div class="d-flex gap-2" style="max-width: 250px;">
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="theme" id="theme1" value="light" autocomplete="off" {% if config.get('theme', 'auto') == 'light' %}checked{% endif %} onchange="this.form.submit()">
+                            <label class="btn btn-outline-primary" for="theme1">亮色</label>
+
+                            <input type="radio" class="btn-check" name="theme" id="theme2" value="dark" autocomplete="off" {% if config.get('theme') == 'dark' %}checked{% endif %} onchange="this.form.submit()">
+                            <label class="btn btn-outline-primary" for="theme2">暗色</label>
+
+                            <input type="radio" class="btn-check" name="theme" id="theme3" value="auto" autocomplete="off" {% if config.get('theme', 'auto') == 'auto' %}checked{% endif %} onchange="this.form.submit()">
+                            <label class="btn btn-outline-primary" for="theme3">自动</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">日志删除频率 (天)</label>
+                    <div class="d-flex gap-2" style="max-width: 250px;">
+                        <input type="number" name="log_clean_days" class="form-control" value="{{ config.get('log_clean_days', '7') }}">
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">定时任务并发数</label>
+                    <div class="d-flex gap-2" style="max-width: 250px;">
+                        <input type="number" name="task_concurrency" class="form-control" value="{{ config.get('task_concurrency', '10') }}">
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">时区</label>
+                    <div class="d-flex gap-2" style="max-width: 250px;">
+                        <select name="timezone" class="form-select">
+                            <option value="Asia/Shanghai" {% if config.get('timezone', 'Asia/Shanghai') == 'Asia/Shanghai' %}selected{% endif %}>Asia/Shanghai</option>
+                            <option value="UTC" {% if config.get('timezone') == 'UTC' %}selected{% endif %}>UTC</option>
+                        </select>
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small">语言</label>
+                    <div class="d-flex gap-2" style="max-width: 250px;">
+                        <select name="language" class="form-select">
+                            <option value="auto" {% if config.get('language', 'auto') == 'auto' %}selected{% endif %}>跟随系统</option>
+                            <option value="zh" {% if config.get('language') == 'zh' %}selected{% endif %}>中文</option>
+                            <option value="en" {% if config.get('language') == 'en' %}selected{% endif %}>English</option>
+                        </select>
+                        <button type="submit" class="btn btn-primary" style="width: 70px;">确认</button>
+                    </div>
+                </div>
+            </form>
+
+            <div>
+                <label class="form-label text-muted small">数据备份还原</label>
+                <div class="d-flex gap-2" style="max-width: 250px;">
+                    <a href="/api/settings/backup" class="btn btn-primary flex-fill d-flex justify-content-center align-items-center">数据备份</a>
+                    <button class="btn btn-light border flex-fill d-flex justify-content-center align-items-center" onclick="alert('请通过覆盖服务器主目录下的 [ data ] 文件夹进行手动还原')">还原数据</button>
+                </div>
+            </div>
+        </div></div>
+    </div>
+
+    <!-- 关于 -->
+    <div class="tab-pane fade" id="tab-about">
+        <div class="card border-0 mb-3"><div class="card-body">
+            <div class="text-center py-5">
+                <div class="mb-4">
+                    <div style="width: 120px; height: 120px; background: #10B981; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">
+                        <i class="bi bi-star-fill text-white" style="font-size: 64px;"></i>
+                    </div>
+                </div>
+                <h3 class="fw-bold mb-3" style="color: #0F172A;">派大星面板</h3>
+                <p class="text-muted mb-4">支持 Python3、JavaScript、Shell 的现代化定时任务管理面板</p>
+                <div class="text-start d-inline-block text-muted" style="font-size: 14px; line-height: 2;">
+                    <div>版本：正式版 v1.0.0</div>
+                    <div>更新时间：2023-11-01 12:00</div>
+                    <div class="mt-3">
+                        <a href="javascript:void(0)" class="text-decoration-none me-3">Github</a>
+                        <a href="javascript:void(0)" class="text-decoration-none me-3">Telegram频道</a>
+                        <a href="javascript:void(0)" class="text-decoration-none">提交BUG</a>
+                    </div>
+                </div>
+            </div>
+        </div></div>
+    </div>
+</div>
+
+<!-- 开启 2FA Modal -->
+<div class="modal fade" id="enable2FAModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">开启两步验证</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body p-4 text-center">
+                <p class="text-muted small mb-3 text-start">请使用 Google Authenticator 或 Microsoft Authenticator 扫描下方二维码。</p>
+
+                <!-- 替换为本地 JS 库渲染的容器 -->
+                <div class="mb-3 d-flex justify-content-center p-3 bg-white border rounded" style="width: max-content; margin: 0 auto;">
+                    <div id="qrcode-container" style="width: 150px; height: 150px;"></div>
+                </div>
+
+                <div class="mb-4">
+                    <span class="text-muted small me-2">若无法扫码，请手动输入密钥：</span>
+                    <code id="totp-secret-text" class="fs-6 user-select-all bg-light px-2 py-1 rounded text-primary"></code>
+                </div>
+                <input type="hidden" id="pending_totp_secret">
+                <div class="px-5">
+                    <input type="text" id="verify_totp_code" class="form-control text-center font-monospace" placeholder="在此输入验证器上的 6 位数字" maxlength="6" style="letter-spacing: 2px;">
+                </div>
+            </div>
+            <div class="modal-footer justify-content-center">
+                <button type="button" class="btn btn-primary px-5" onclick="submitEnable2FA()">验证并开启保护</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 停用 2FA Modal -->
+<div class="modal fade" id="disable2FAModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header border-bottom"><h6 class="modal-title fw-bold text-danger">停用两步验证</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body p-4">
+                <p class="text-muted small mb-3">为了您的安全，请验证当前系统登录密码以停用该功能。</p>
+                <input type="password" id="disable_totp_pwd" class="form-control" placeholder="请输入您的登录密码">
+            </div>
+            <div class="modal-footer justify-content-center">
+                <button type="button" class="btn btn-danger px-4" onclick="submitDisable2FA()">确认停用</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<!-- 引入您刚刚下载到本地的二维码生成库 -->
+<script src="{{ url_for('static', filename='vendor/qrcode/qrcode.min.js') }}"></script>
+<script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const tabName = urlParams.get('tab');
+    if (tabName) {
+        const tabBtn = document.querySelector(`button[data-bs-target="#tab-${tabName}"]`);
+        if (tabBtn) {
+            const bsTab = new bootstrap.Tab(tabBtn);
+            bsTab.show();
+        }
+    }
+
+    function toggleNotify() {
+        const type = document.getElementById('notify_type').value;
+        const paramsDiv = document.getElementById('notify-params');
+        if (type === 'none') {
+            paramsDiv.style.display = 'none';
+        } else {
+            paramsDiv.style.display = 'block';
+            document.querySelectorAll('.tg-param').forEach(el => el.style.display = type === 'telegram' ? 'block' : 'none');
+            document.querySelectorAll('.dt-param').forEach(el => el.style.display = type === 'dingtalk' ? 'block' : 'none');
+            document.querySelectorAll('.pp-param').forEach(el => el.style.display = type === 'pushplus' ? 'block' : 'none');
+            document.querySelectorAll('.sc-param').forEach(el => el.style.display = type === 'serverchan' ? 'block' : 'none');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', toggleNotify);
+
+    let enableModal, disableModal;
+    document.addEventListener('DOMContentLoaded', () => {
+        enableModal = new bootstrap.Modal(document.getElementById('enable2FAModal'));
+        disableModal = new bootstrap.Modal(document.getElementById('disable2FAModal'));
+    });
+
+    function openEnable2FAModal() {
+        fetch('/api/2fa/generate').then(res => res.json()).then(data => {
+            document.getElementById('totp-secret-text').innerText = data.secret;
+            document.getElementById('pending_totp_secret').value = data.secret;
+            document.getElementById('verify_totp_code').value = '';
+
+            // 使用纯本地前端 JS 生成二维码，不发出任何外网请求
+            const qrContainer = document.getElementById('qrcode-container');
+            qrContainer.innerHTML = '';
+            new QRCode(qrContainer, {
+                text: data.uri,
+                width: 150,
+                height: 150,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.M
+            });
+
+            enableModal.show();
+        }).catch((e) => {
+            console.error(e);
+            alert("获取验证码数据失败，请刷新页面重试");
+        });
+    }
+
+    function submitEnable2FA() {
+        const secret = document.getElementById('pending_totp_secret').value;
+        const code = document.getElementById('verify_totp_code').value;
+        if(!code || code.length !== 6) return window.alert("请输入6位完整的动态验证码");
+
+        const fd = new FormData();
+        fd.append('secret', secret);
+        fd.append('code', code);
+
+        fetch('/api/2fa/enable', {method:'POST', body: fd}).then(res => res.json()).then(data => {
+            if(data.status === 'success') {
+                window.alert("二次验证开启成功！");
+                location.reload();
+            } else {
+                window.alert(data.msg);
+            }
+        });
+    }
+
+    function openDisable2FAModal() {
+        document.getElementById('disable_totp_pwd').value = '';
+        disableModal.show();
+    }
+
+    function submitDisable2FA() {
+        const pwd = document.getElementById('disable_totp_pwd').value;
+        if(!pwd) return window.alert("请输入密码");
+
+        const fd = new FormData();
+        fd.append('password', pwd);
+
+        fetch('/api/2fa/disable', {method:'POST', body: fd}).then(res => res.json()).then(data => {
+            if(data.status === 'success') {
+                window.alert("二次验证已停用！");
+                location.reload();
+            } else {
+                window.alert(data.msg);
+            }
+        });
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>初始化配置 - 派大星面板</title>
+    <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/install.css') }}" rel="stylesheet">
+</head>
+<body>
+
+    <div class="logo-container">
+        <div class="logo-icon"><i class="bi bi-star-fill"></i></div>
+        <h4 class="fw-bold m-0">初始化配置</h4>
+    </div>
+
+    <div class="install-card">
+        <div class="stepper">
+            <div class="step-line"></div>
+            <div class="step-item active" id="indicator-1">
+                <div class="step-circle">1</div><div class="step-text">欢迎使用</div>
+            </div>
+            <div class="step-item" id="indicator-2">
+                <div class="step-circle">2</div><div class="step-text">账户设置</div>
+            </div>
+            <div class="step-item" id="indicator-3">
+                <div class="step-circle">3</div><div class="step-text">通知设置</div>
+            </div>
+            <div class="step-item" id="indicator-4">
+                <div class="step-circle">4</div><div class="step-text">完成安装</div>
+            </div>
+        </div>
+
+        <div class="step-content">
+
+            <div class="content-section active" id="step-1">
+                <div class="text-center" style="margin-top: 50px;">
+                    <h3 class="title fs-4 mb-3">欢迎使用派大星面板</h3>
+                    <p class="subtitle">支持 Python3、JavaScript、Shell 的<br>现代化定时任务管理面板</p>
+                    <button class="btn btn-primary px-5" onclick="nextStep(2)">开始安装</button>
+                </div>
+            </div>
+
+            <div class="content-section" id="step-2">
+                <div class="mb-3">
+                    <label class="form-label"><span class="text-danger me-1">*</span>用户名</label>
+                    <input type="text" id="reg_username" class="form-control" placeholder="用户名" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label"><span class="text-danger me-1">*</span>密码</label>
+                    <div class="input-group">
+                        <input type="password" id="reg_pwd1" class="form-control border-end-0" placeholder="密码" required>
+                        <span class="input-group-text eye-icon border-start-0" onclick="togglePwd('reg_pwd1', this)"><i class="bi bi-eye-slash"></i></span>
+                    </div>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label"><span class="text-danger me-1">*</span>确认密码</label>
+                    <div class="input-group">
+                        <input type="password" id="reg_pwd2" class="form-control border-end-0" placeholder="确认密码" required>
+                        <span class="input-group-text eye-icon border-start-0" onclick="togglePwd('reg_pwd2', this)"><i class="bi bi-eye-slash"></i></span>
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="validateAndNextStep2()">下一步</button>
+            </div>
+
+            <div class="content-section" id="step-3">
+                <label class="form-label">通知方式</label>
+                <select id="notify_type" class="form-select" onchange="handleNotifyChange()">
+                    <option value="none">请选择通知方式</option>
+                    <option value="telegram">Telegram</option>
+                    <option value="dingtalk">钉钉 (DingTalk)</option>
+                    <option value="pushplus">Push Plus (推送加)</option>
+                    <option value="serverchan">Server酱</option>
+                </select>
+
+                <div id="notify-params-area"></div>
+
+                <div class="mt-4 d-flex align-items-center">
+                    <button class="btn btn-primary" onclick="submitInstall()">配置并完成</button>
+                    <a class="btn-link-skip" onclick="submitInstall('none')">跳过</a>
+                </div>
+            </div>
+
+            <div class="content-section" id="step-4">
+                <div class="text-center" style="margin-top: 50px;">
+                    <h3 class="title fs-4 mb-4">恭喜，安装完成！</h3>
+                    <div class="mb-4">
+                        <i class="bi bi-check-circle-fill text-success" style="font-size: 48px;"></i>
+                    </div>
+                    <a href="/login" class="btn btn-primary px-5 mt-2">去登录</a>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1055;">
+        <div id="errorToast" class="toast align-items-center text-bg-danger border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body" id="errorMsg"></div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+    <script>
+        const installData = { username: "", password: "", notify_type: "none" };
+
+        function showError(msg) {
+            document.getElementById('errorMsg').innerText = msg;
+            new bootstrap.Toast(document.getElementById('errorToast')).show();
+        }
+
+        function togglePwd(id, btn) {
+            const el = document.getElementById(id), icon = btn.querySelector('i');
+            if(el.type === "password") { el.type = "text"; icon.classList.replace('bi-eye-slash', 'bi-eye'); }
+            else { el.type = "password"; icon.classList.replace('bi-eye', 'bi-eye-slash'); }
+        }
+
+        function nextStep(step) {
+            document.querySelectorAll('.content-section').forEach(el => el.classList.remove('active'));
+            document.getElementById('step-' + step).classList.add('active');
+
+            for(let i=1; i<=4; i++){
+                let ind = document.getElementById('indicator-' + i);
+                ind.className = 'step-item';
+                if(i < step) {
+                    ind.classList.add('completed');
+                    ind.querySelector('.step-circle').innerHTML = '<i class="bi bi-check"></i>';
+                } else if(i === step) {
+                    ind.classList.add('active');
+                    ind.querySelector('.step-circle').innerHTML = i;
+                } else {
+                    ind.querySelector('.step-circle').innerHTML = i;
+                }
+            }
+        }
+
+        function validateAndNextStep2() {
+            const u = document.getElementById('reg_username').value.trim();
+            const p1 = document.getElementById('reg_pwd1').value;
+            const p2 = document.getElementById('reg_pwd2').value;
+
+            if(!u) return showError("请输入用户名");
+            if(!p1) return showError("请输入密码");
+            if(p1 !== p2) return showError("两次密码不一致");
+
+            installData.username = u;
+            installData.password = p1;
+            nextStep(3);
+        }
+
+        function handleNotifyChange() {
+            const type = document.getElementById('notify_type').value;
+            const area = document.getElementById('notify-params-area');
+            area.innerHTML = '';
+            installData.notify_type = type;
+
+            if(type === 'telegram') {
+                area.style.display = 'block';
+                area.innerHTML = `
+                    <div class="mb-2"><input type="text" id="tg_token" class="form-control form-control-sm" placeholder="TG_BOT_TOKEN" required></div>
+                    <div><input type="text" id="tg_userid" class="form-control form-control-sm" placeholder="TG_USER_ID" required></div>
+                `;
+            } else if (type === 'dingtalk') {
+                area.style.display = 'block';
+                area.innerHTML = `
+                    <div class="mb-2"><input type="text" id="dt_token" class="form-control form-control-sm" placeholder="DD_BOT_TOKEN" required></div>
+                    <div><input type="text" id="dt_secret" class="form-control form-control-sm" placeholder="DD_BOT_SECRET (选填)"></div>
+                `;
+            } else if (type === 'pushplus') {
+                area.style.display = 'block';
+                area.innerHTML = `<div><input type="text" id="pp_token" class="form-control form-control-sm" placeholder="PUSH_PLUS_TOKEN" required></div>`;
+            } else if (type === 'serverchan') {
+                area.style.display = 'block';
+                area.innerHTML = `<div><input type="text" id="sc_key" class="form-control form-control-sm" placeholder="PUSH_KEY" required></div>`;
+            } else {
+                area.style.display = 'none';
+            }
+        }
+
+        function submitInstall(forceSkip) {
+            const payload = { ...installData };
+
+            if (forceSkip === 'none') {
+                payload.notify_type = 'none';
+            } else {
+                if (payload.notify_type === 'telegram') {
+                    payload.TG_BOT_TOKEN = document.getElementById('tg_token').value.trim();
+                    payload.TG_USER_ID = document.getElementById('tg_userid').value.trim();
+                    if(!payload.TG_BOT_TOKEN || !payload.TG_USER_ID) return showError("请完整填写 Telegram 参数");
+                } else if (payload.notify_type === 'dingtalk') {
+                    payload.DD_BOT_TOKEN = document.getElementById('dt_token').value.trim();
+                    payload.DD_BOT_SECRET = document.getElementById('dt_secret').value.trim();
+                    if(!payload.DD_BOT_TOKEN) return showError("请填写钉钉 Token");
+                } else if (payload.notify_type === 'pushplus') {
+                    payload.PUSH_PLUS_TOKEN = document.getElementById('pp_token').value.trim();
+                    if(!payload.PUSH_PLUS_TOKEN) return showError("请填写 PushPlus Token");
+                } else if (payload.notify_type === 'serverchan') {
+                    payload.PUSH_KEY = document.getElementById('sc_key').value.trim();
+                    if(!payload.PUSH_KEY) return showError("请填写 Server酱 PUSH_KEY");
+                }
+            }
+
+            fetch('/install', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.status === 'success') nextStep(4);
+                else showError(data.msg || "初始化失败，请重试");
+            }).catch(err => showError("网络错误: " + err));
+        }
+    </script>
+</body>
+</html>

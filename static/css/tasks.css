@@ -1,0 +1,83 @@
+/* === 日志弹窗定制滚动条与样式 === */
+#modal-log-container::-webkit-scrollbar { width: 8px; }
+#modal-log-container::-webkit-scrollbar-thumb { background-color: #CBD5E1; border-radius: 4px; }
+#modal-log-container::-webkit-scrollbar-track { background: transparent; }
+
+/* === 弹窗暗黑模式适配 === */
+html.dark-theme #realtimeLogModal .modal-header,
+html.dark-theme #realtimeLogModal .modal-body,
+html.dark-theme #realtimeLogModal .modal-footer {
+    background-color: #1E293B !important;
+    border-color: #334155 !important;
+}
+html.dark-theme #realtimeLogModal .modal-title,
+html.dark-theme #realtimeLogModal .modal-title i {
+    color: #F8FAFC !important;
+}
+html.dark-theme #modal-log-container {
+    color: #E2E8F0 !important;
+}
+html.dark-theme #modal-log-container::-webkit-scrollbar-thumb {
+    background-color: #475569;
+}
+
+/* === 状态徽章 === */
+.badge-soft { padding: 4px 8px; font-weight: 500; border-radius: 4px; font-size: 12px; }
+.badge-soft-success { background: #ECFDF5; color: #059669; }
+.badge-soft-danger { background: #FEF2F2; color: #DC2626; }
+.badge-soft-secondary { background: #F1F5F9; color: #475569; }
+.badge-soft-warning { background: #FFFBEB; color: #D97706; }
+.code-badge { background: #F1F5F9; color: #0F172A; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 12px; border: 1px solid #E2E8F0; }
+a.code-badge { cursor: pointer; transition: all 0.2s; text-decoration: none; }
+a.code-badge:hover { background-color: #DBEAFE; color: #1D4ED8; border-color: #BFDBFE; }
+
+/* === 操作按钮样式 === */
+.action-link {
+    color: #2563EB;
+    background: transparent;
+    border: none;
+    padding: 0 8px;
+    font-size: 14px;
+    font-weight: 400;
+    cursor: pointer;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+.action-link:hover { color: #1D4ED8; text-decoration: underline; }
+.action-link.text-danger { color: #DC2626; }
+.action-link.text-danger:hover { color: #B91C1C; }
+
+.action-more {
+    color: #2563EB;
+    font-weight: bold;
+    background: transparent;
+    border: none;
+    padding: 0 4px;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.dropdown-menu-action {
+    min-width: 110px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    border: 1px solid var(--border-color);
+    padding: 4px 0;
+    margin-top: 5px !important;
+    z-index: 1050;
+}
+.dropdown-menu-action .dropdown-item {
+    font-size: 13px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    color: var(--text-main);
+}
+.dropdown-menu-action .dropdown-item i { font-size: 14px; margin-right: 10px; color: var(--text-muted); }
+.dropdown-menu-action .dropdown-item:hover { background-color: #F8FAFC; color: var(--primary); }
+.dropdown-menu-action .dropdown-item.text-danger:hover { background-color: #FEF2F2; color: #DC2626; }
+
+/* === 解决下拉菜单被遮挡 === */
+.table-responsive {
+    overflow: visible !important;
+}

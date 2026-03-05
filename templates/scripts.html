@@ -1,0 +1,132 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="fw-bold mb-0">脚本管理</h5>
+</div>
+
+<div class="row g-3 h-100" style="min-height: 70vh;">
+    <!-- 左侧文件列表 -->
+    <div class="col-md-auto" style="width: 220px;">
+        <div class="card border-0 h-100">
+            <div class="card-header bg-white border-bottom"><h6 class="mb-0 fw-bold">文件列表</h6></div>
+            <div class="card-body p-0" style="overflow-y: auto; max-height: 65vh;">
+                <div class="list-group list-group-flush border-0">
+                    {% for f in files %}
+                    <a href="/scripts?file={{ f }}" class="list-group-item list-group-item-action border-0 {% if current_file == f %}active fw-bold rounded-3 m-1 shadow-sm{% endif %}" style="padding: 8px 12px; font-size: 14px;">
+                        <i class="bi {% if f.endswith('.js') %}bi-filetype-js text-warning{% elif f.endswith('.py') %}bi-filetype-py text-primary{% elif f.endswith('.sh') %}bi-filetype-sh text-success{% else %}bi-file-earmark-text text-muted{% endif %} me-2"></i>{{ f }}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧编辑器 -->
+    <div class="col d-flex flex-column" style="min-width: 0;">
+        <div class="card border-0 flex-grow-1">
+            <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center">
+                <h6 class="mb-0 fw-medium font-monospace text-primary"><i class="bi bi-code-square me-2"></i>{{ current_file }}</h6>
+                <div>
+                    <!-- 保存按钮已移至此处，作为第一顺位按钮 -->
+                    <button type="button" class="btn btn-primary btn-sm me-2" onclick="saveScript()"><i class="bi bi-floppy me-1"></i>保存脚本</button>
+                    <!-- 进入调试按钮 -->
+                    <a href="/scripts/debug?file={{ current_file }}" class="btn btn-outline-success btn-sm me-2"><i class="bi bi-play-circle me-1"></i>进入调试</a>
+                    <!-- 语法检查按钮 -->
+                    <button type="button" class="btn btn-outline-warning btn-sm" onclick="checkSyntax()"><i class="bi bi-bug me-1"></i>语法检查</button>
+                </div>
+            </div>
+            <div class="card-body p-0 position-relative">
+                <div id="monaco-editor" style="width: 100%; height: 100%; min-height: 600px; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; overflow: hidden;"></div>
+                <form id="saveForm" method="POST" style="display:none;">
+                    <input type="hidden" name="filename" value="{{ current_file }}">
+                    <textarea name="content" id="hiddenContent"></textarea>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script id="raw-script-content" type="application/json">
+    {{ content | tojson | safe }}
+</script>
+{% endblock %}
+
+{% block scripts %}
+<!-- 修改为引用本地静态资源文件 -->
+<script src="{{ url_for('static', filename='vendor/monaco-editor/min/vs/loader.js') }}"></script>
+<script>
+    require.config({ paths: { 'vs': "{{ url_for('static', filename='vendor/monaco-editor/min/vs') }}" }});
+    let editor;
+
+    let lang = 'plaintext';
+    const filename = "{{ current_file }}";
+    if(filename.endsWith('.js')) lang = 'javascript';
+    else if(filename.endsWith('.py')) lang = 'python';
+    else if(filename.endsWith('.sh')) lang = 'shell';
+    else if(filename.endsWith('.json')) lang = 'json';
+
+    const safeContent = JSON.parse(document.getElementById('raw-script-content').textContent);
+
+    require(['vs/editor/editor.main'], function () {
+        const theme = document.documentElement.classList.contains('dark-theme') ? 'vs-dark' : 'vs';
+        editor = monaco.editor.create(document.getElementById('monaco-editor'), {
+            value: safeContent,
+            language: lang,
+            theme: theme,
+            automaticLayout: true,
+            fontSize: 14,
+            minimap: { enabled: true },
+            wordWrap: "on",
+            scrollBeyondLastLine: false,
+            roundedSelection: false,
+            padding: { top: 16 }
+        });
+    });
+
+    function saveScript() {
+        if(!editor) return;
+        document.getElementById('hiddenContent').value = editor.getValue();
+        document.getElementById('saveForm').submit();
+    }
+
+    function checkSyntax() {
+        if(!editor) return;
+        const btn = event.currentTarget;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>检查中...';
+        btn.disabled = true;
+
+        fetch('/api/scripts/check', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: new URLSearchParams({ filename: filename, content: editor.getValue() })
+        }).then(res => res.json()).then(data => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+
+            const model = editor.getModel();
+            if (data.status === 'ok') {
+                monaco.editor.setModelMarkers(model, "syntax-checker", []);
+                window.alert('✅ ' + data.msg);
+            } else {
+                const lineNum = data.line || 1;
+                monaco.editor.setModelMarkers(model, "syntax-checker", [{
+                    startLineNumber: lineNum,
+                    startColumn: 1,
+                    endLineNumber: lineNum,
+                    endColumn: 1000,
+                    message: data.msg,
+                    severity: monaco.MarkerSeverity.Error
+                }]);
+                editor.revealLineInCenter(lineNum);
+                window.alert('❌ 发现语法错误：\n\n' + data.msg);
+            }
+        }).catch(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            window.alert('请求失败，请检查网络');
+        });
+    }
+</script>
+{% endblock %}

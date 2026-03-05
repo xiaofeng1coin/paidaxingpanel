@@ -1,0 +1,104 @@
+/* =========================================
+   独立全屏调试页面专属样式
+   ========================================= */
+
+body, html {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+    background-color: #FFFFFF;
+    color: #334155;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+/* 顶部工具栏 */
+.debug-toolbar {
+    height: 56px;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #E2E8F0;
+    gap: 12px;
+    background-color: #FFFFFF;
+}
+
+/* 统一蓝色操作按钮 */
+.btn-toolbar {
+    background-color: #1E90FF;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 0 20px;
+    height: 32px;
+    font-size: 14px;
+    font-weight: 400;
+    transition: background-color 0.2s;
+    text-decoration: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.btn-toolbar:hover { background-color: #007BFF; color: white; }
+.btn-toolbar:disabled { background-color: #82C5FF; cursor: not-allowed; }
+
+/* 左右分屏主体 */
+.debug-main {
+    display: flex;
+    height: calc(100vh - 56px);
+    width: 100%;
+}
+
+/* 左侧代码编辑器容器 */
+.editor-container {
+    flex: 1;
+    border-right: 2px solid #E2E8F0;
+    position: relative;
+    min-width: 0;
+}
+
+/* 右侧日志控制台容器 */
+.log-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: #FFFFFF;
+    min-width: 0;
+}
+
+.log-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #334155;
+    white-space: pre-wrap;
+}
+
+/* =========================================
+   系统暗黑模式 (Dark Mode) 自适应
+   ========================================= */
+html.dark-theme body,
+html.dark-theme .debug-toolbar,
+html.dark-theme .log-container {
+    background-color: #0F172A;
+    border-color: #334155;
+}
+
+html.dark-theme .editor-container {
+    border-right-color: #334155;
+}
+
+html.dark-theme .log-content {
+    color: #E2E8F0;
+}
+
+html.dark-theme .form-select {
+    background-color: #1E293B;
+    color: #F8FAFC;
+    border-color: #475569;
+}

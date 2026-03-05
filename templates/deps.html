@@ -1,0 +1,199 @@
+{% extends 'base.html' %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/deps.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="fw-bold mb-0">依赖管理</h5>
+</div>
+
+<!-- 顶部选项卡：切换 Node.js / Python / Linux -->
+<ul class="nav dep-tabs mb-3" id="depsTabs">
+    <li class="nav-item"><button type="button" class="nav-link active" data-type="npm"><i class="bi bi-box me-2"></i>Node.js</button></li>
+    <li class="nav-item"><button type="button" class="nav-link" data-type="pip"><i class="bi bi-filetype-py me-2"></i>Python</button></li>
+    <li class="nav-item"><button type="button" class="nav-link" data-type="apt"><i class="bi bi-ubuntu me-2"></i>Linux</button></li>
+</ul>
+
+<!-- 安装表单 (隐藏了环境选择框，根据 Tab 自动决定) -->
+<div class="card border-0 mb-3">
+    <div class="card-body p-3 d-flex align-items-center gap-2">
+        <form id="installForm" class="d-flex flex-grow-1 gap-2 m-0 align-items-center">
+            <!-- 该隐藏字段的值将被 JS 动态替换 -->
+            <input type="hidden" name="type" id="installType" value="npm">
+
+            <span class="text-muted small fw-medium text-nowrap"><i class="bi bi-cloud-download me-1"></i>快捷安装:</span>
+            <input type="text" name="package" id="pkgInput" class="form-control form-control-sm font-monospace flex-grow-1" placeholder="例如: axios (Node.js)" required>
+            <button type="submit" class="btn btn-primary btn-sm" id="installBtn" style="width: 80px;"><span id="btnText">安装</span></button>
+        </form>
+    </div>
+</div>
+
+<div class="card border-0">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <!-- 彻底实现内容全局居中，且操作列尺寸恰到好处 -->
+                        <th class="text-center" style="width: 15%;">序号</th>
+                        <th class="text-center" style="width: 50%;">依赖包名称</th>
+                        <th class="text-center" style="width: 20%;">运行状态</th>
+                        <th class="text-center" style="width: 140px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="depsTbody">
+                    {% for dep in dependencies %}
+                    <!-- 通过 class: row-{{ dep.pkg_type }} 进行前台过滤显示 -->
+                    <tr id="dep-row-{{ dep.id }}" class="dep-row row-{{ dep.pkg_type }}" style="display: none;">
+                        <td class="text-center text-muted fw-medium">{{ loop.index }}</td>
+                        <td class="text-center font-monospace text-dark fw-bold">{{ dep.name }}</td>
+                        <td class="text-center" id="status-col-{{ dep.id }}">
+                            {% if dep.status == 'Installing' %}
+                                <span class="badge-soft-status" style="background:#E0F2FE;color:#0284C7;">安装中</span>
+                            {% elif dep.status == 'Uninstalling' %}
+                                <span class="badge-soft-status" style="background:#FEF3C7;color:#D97706;">卸载中</span>
+                            {% elif dep.status == 'Installed' %}
+                                <span class="badge-soft-status" style="background:#ECFDF5;color:#059669;">已安装</span>
+                            {% else %}
+                                <span class="badge-soft-status" style="background:#FEF2F2;color:#DC2626;">出错</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center" id="action-col-{{ dep.id }}">
+                            <div class="btn-group justify-content-center">
+                                <button class="btn btn-sm btn-light border text-dark" onclick='openLogModal({{ dep.id }}, {{ dep.name | tojson }}, "view")'>日志</button>
+                                <button class="btn btn-sm btn-outline-danger" onclick='uninstallDep({{ dep.id }}, {{ dep.name | tojson }})'>卸载</button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    <!-- 当前分类无数据时展示的空行提示 -->
+                    <tr id="empty-row" style="display: none;"><td colspan="4" class="text-center py-5 text-muted">当前分类暂无依赖记录</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 纯亮色终端弹窗 -->
+<div class="modal fade" id="depsLogModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content border-0 bg-transparent">
+            <div class="terminal-window">
+                <div class="terminal-header d-flex align-items-center">
+                    <div class="d-flex gap-2 me-3"><div class="rounded-circle bg-danger" style="width:10px;height:10px;"></div><div class="rounded-circle bg-warning" style="width:10px;height:10px;"></div><div class="rounded-circle bg-success" style="width:10px;height:10px;"></div></div>
+                    <span class="mb-0 flex-grow-1 text-center font-monospace" id="logModalTitle" style="color:#475569; font-size:12px; font-weight:600;">Package Manager</span>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" onclick="reloadIfFinished()" style="font-size:10px;"></button>
+                </div>
+                <pre id="modal-log-container" class="m-0 p-3" style="height: 400px; overflow-y: auto; white-space: pre-wrap; margin:0;"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const socket = io(); let currentListeningDepId = null; let terminalModal = null; let isWorking = false;
+    document.addEventListener("DOMContentLoaded", () => { terminalModal = new bootstrap.Modal(document.getElementById('depsLogModal')); });
+
+    function cleanTerminalOutput(t) { return t ? t.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '') : ""; }
+
+    // 过滤展示当前选项卡对应类型的依赖
+    function filterDeps() {
+        const type = document.getElementById('installType').value;
+        const rows = document.querySelectorAll('.dep-row');
+        let hasVisible = false;
+
+        rows.forEach(row => {
+            if (row.classList.contains('row-' + type)) {
+                row.style.display = '';
+                hasVisible = true;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+
+        const emptyRow = document.getElementById('empty-row');
+        if (emptyRow) {
+            emptyRow.style.display = hasVisible ? 'none' : '';
+        }
+    }
+
+    // 绑定选项卡点击事件
+    document.querySelectorAll('#depsTabs .nav-link').forEach(tab => {
+        tab.addEventListener('click', function() {
+            // 激活态样式切换
+            document.querySelectorAll('#depsTabs .nav-link').forEach(t => t.classList.remove('active'));
+            this.classList.add('active');
+
+            // 更改隐藏表单值
+            const type = this.getAttribute('data-type');
+            document.getElementById('installType').value = type;
+
+            // 更改占位符提示文案
+            const placeholders = { npm: '例如: axios (Node.js包)', pip: '例如: requests (Python包)', apt: '例如: wget (Linux软件)' };
+            document.getElementById('pkgInput').placeholder = placeholders[type];
+
+            filterDeps();
+        });
+    });
+
+    // 页面加载完成后，默认点击激活 Node.js
+    const defaultTab = document.querySelector('#depsTabs .nav-link[data-type="npm"]');
+    if(defaultTab) defaultTab.click();
+
+    function openLogModal(depId, pkgName, action="view") {
+        currentListeningDepId = depId;
+        const titles = { 'install': 'INSTALLING ', 'uninstall': 'UNINSTALLING ', 'view': 'LOGS FOR ' };
+        document.getElementById('logModalTitle').innerText = titles[action] + pkgName;
+        const c = document.getElementById('modal-log-container');
+        c.innerHTML = action === 'view' ? '<span style="color:#2563EB; font-weight:bold;">[System]</span> 读取历史记录...\n' : '<span style="color:#D97706; font-weight:bold;">[System]</span> 初始化安装环境...\n';
+        terminalModal.show();
+        if (action === 'view') { fetch(`/api/deps/log/${depId}`).then(r => r.json()).then(d => { c.textContent = cleanTerminalOutput(d.content); c.scrollTop = c.scrollHeight; }); }
+    }
+
+    document.getElementById('installForm').addEventListener('submit', function(e) {
+        e.preventDefault(); const fd = new FormData(this); const pkg = fd.get('package');
+        document.getElementById('installBtn').disabled = true; document.getElementById('btnText').innerText = '请求中'; isWorking = true;
+        fetch('/api/deps/install', { method: 'POST', body: fd }).then(r => r.json()).then(d => {
+            if (d.status === 'success') {
+                document.getElementById('pkgInput').value = '';
+                openLogModal(d.id, pkg, 'install');
+            }
+            else window.alert('错误: ' + d.msg);
+        }).finally(() => { document.getElementById('installBtn').disabled = false; document.getElementById('btnText').innerText = '安装'; });
+    });
+
+    function uninstallDep(id, pkg) {
+        window.sysConfirm(`确定要强行卸载 [ ${pkg} ] 吗？`, () => {
+            isWorking = true;
+            fetch(`/api/deps/uninstall/${id}`, { method: 'POST' }).then(r => r.json()).then(d => { if(d.status === 'success') openLogModal(id, pkg, 'uninstall'); });
+        });
+    }
+
+    function reloadIfFinished() { if(isWorking) location.reload(); }
+
+    socket.on('log_stream', function(msg) {
+        if (msg.task_id === `dep_${currentListeningDepId}`) {
+            const c = document.getElementById('modal-log-container'); if (msg.clear) c.textContent = '';
+            c.textContent += cleanTerminalOutput(msg.data); c.scrollTop = c.scrollHeight;
+            if (msg.data.includes('执行完毕') || msg.data.includes('错误')) isWorking = true;
+        }
+    });
+
+    socket.on('dep_status', function(msg) {
+        const r = document.getElementById(`dep-row-${msg.id}`);
+        if(!r && msg.status !== 'Deleted') { setTimeout(() => { if(!document.getElementById('depsLogModal').classList.contains('show')) location.reload(); }, 1500); return; }
+        if(msg.status === 'Deleted' && r) {
+            r.remove();
+            filterDeps(); // 卸载成功移除行后，重新检查空状态
+        } else if (r) {
+            const sc = document.getElementById(`status-col-${msg.id}`);
+            if(msg.status === 'Installed') sc.innerHTML = '<span class="badge-soft-status" style="background:#ECFDF5;color:#059669;">已安装</span>';
+            else if(msg.status === 'Error') sc.innerHTML = '<span class="badge-soft-status" style="background:#FEF2F2;color:#DC2626;">出错</span>';
+        }
+    });
+</script>
+{% endblock %}

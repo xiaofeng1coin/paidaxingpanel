@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>派大星面板 - 控制中心</title>
+    <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
+    <!-- 全局核心样式已在此处引入，包含暗黑模式适配 -->
+    <link href="{{ url_for('static', filename='css/base.css') }}" rel="stylesheet">
+
+    <script>
+        (function() {
+            const theme = "{{ sys_theme }}";
+            function setDark(isDark) {
+                if (isDark) document.documentElement.classList.add('dark-theme');
+                else document.documentElement.classList.remove('dark-theme');
+            }
+            if (theme === 'dark') { setDark(true); }
+            else if (theme === 'light') { setDark(false); }
+            else {
+                const mq = window.matchMedia('(prefers-color-scheme: dark)');
+                setDark(mq.matches);
+                mq.addEventListener('change', e => setDark(e.matches));
+            }
+        })();
+    </script>
+    {% block styles %}{% endblock %}
+</head>
+<body>
+    <div class="app-layout">
+        <div class="d-flex d-md-none align-items-center justify-content-between px-3 py-2 border-bottom bg-white">
+            <div class="d-flex align-items-center"><div class="logo-icon me-2" style="width:28px; height:28px; font-size:14px;"><i class="bi bi-star-fill"></i></div><span class="fw-bold">派大星面板</span></div>
+            <button class="btn btn-sm btn-light border btn-icon" id="mobileMenuBtn"><i class="bi bi-list"></i></button>
+        </div>
+
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <aside class="app-sidebar" id="appSidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon shadow-sm"><i class="bi bi-star-fill"></i></div>
+                <div class="sidebar-text-container d-flex flex-column">
+                    <h6 class="mb-0 fw-bold" style="color: var(--text-main);">派大星面板</h6>
+                    <span class="text-muted font-monospace" style="font-size: 10px;">v1.0.0</span>
+                </div>
+            </div>
+
+            <div class="sidebar-menu px-2 py-3 flex-grow-1 overflow-x-hidden">
+                <ul class="nav flex-column">
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/' %}active{% endif %}" href="/" title="定时任务"><i class="bi bi-clock-history"></i><span>定时任务</span></a></li>
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/envs' %}active{% endif %}" href="/envs" title="环境变量"><i class="bi bi-sliders"></i><span>环境变量</span></a></li>
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/config' %}active{% endif %}" href="/config" title="配置文件"><i class="bi bi-file-earmark-text"></i><span>配置文件</span></a></li>
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/scripts' %}active{% endif %}" href="/scripts" title="脚本管理"><i class="bi bi-code-square"></i><span>脚本管理</span></a></li>
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/deps' %}active{% endif %}" href="/deps" title="依赖管理"><i class="bi bi-box-seam"></i><span>依赖管理</span></a></li>
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/logs' %}active{% endif %}" href="/logs" title="系统日志"><i class="bi bi-terminal"></i><span>系统日志</span></a></li>
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/settings' %}active{% endif %}" href="/settings" title="系统设置"><i class="bi bi-gear"></i><span>系统设置</span></a></li>
+                </ul>
+            </div>
+
+            <div class="sidebar-bottom flex-shrink-0 bg-light">
+                {% if current_user.is_authenticated %}
+                <div class="user-profile-wrap dropup d-flex align-items-center" data-bs-toggle="dropdown" aria-expanded="false" style="cursor: pointer; min-width: 0;">
+                    <img src="/api/avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';" style="width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex-shrink: 0;">
+                    <i class="bi bi-person-circle text-muted" style="display: none; font-size: 32px;"></i>
+                    <span class="user-info ms-2 fw-medium text-dark small text-truncate" style="max-width: 80px;">{{ current_user.username }}</span>
+                </div>
+                <ul class="dropdown-menu shadow-sm border-0 mb-2" style="min-width: 140px; border-radius: 8px;">
+                    <li><a class="dropdown-item text-danger d-flex align-items-center py-2" href="/logout"><i class="bi bi-box-arrow-right me-2"></i>退出登录</a></li>
+                </ul>
+                {% endif %}
+
+                <button class="sidebar-toggle-btn" id="sidebarCollapseBtn" title="折叠/展开">
+                    <i class="bi bi-chevron-left fs-5"></i>
+                </button>
+            </div>
+        </aside>
+
+        <main class="app-main flex-grow-1 h-100 overflow-auto position-relative">
+            <div class="container-fluid" style="max-width: 1400px; margin: 0 auto;">
+                <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1055;">
+                    {% with messages = get_flashed_messages() %}
+                        {% if messages %}
+                            <div class="toast align-items-center bg-white border show shadow-sm mb-2" role="alert">
+                                <div class="d-flex p-2">
+                                    <div class="toast-body fs-6 text-success"><i class="bi bi-check-circle-fill me-2"></i>{{ messages[0] }}</div>
+                                    <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button>
+                                </div>
+                            </div>
+                        {% endif %}
+                    {% endwith %}
+
+                    <!-- 上次登录信息弹窗 -->
+                    {% if last_login_info %}
+                        <div class="toast border-0 shadow-lg show toast-login-info" role="alert" aria-live="assertive" aria-atomic="true" id="lastLoginToast">
+                            <div class="toast-header border-0 bg-transparent pb-0 mt-1">
+                                <div class="rounded bg-primary bg-opacity-10 p-1 me-2 d-flex align-items-center justify-content-center" style="width:24px;height:24px;"><i class="bi bi-shield-check text-primary"></i></div>
+                                <strong class="me-auto text-dark" style="font-size: 14px;">上次登录记录</strong>
+                                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+                            </div>
+                            <div class="toast-body text-muted pt-2 pb-3" style="font-size: 13px;">
+                                <div class="d-flex mb-1"><span class="text-secondary me-2" style="width:40px;">时间</span><span class="font-monospace text-dark">{{ last_login_info.time }}</span></div>
+                                <div class="d-flex mb-1"><span class="text-secondary me-2" style="width:40px;">IP</span><span class="font-monospace text-dark">{{ last_login_info.ip }}</span></div>
+                                <div class="d-flex mb-1"><span class="text-secondary me-2" style="width:40px;">地点</span><span class="text-dark">{{ last_login_info.address }}</span></div>
+                                <div class="d-flex"><span class="text-secondary me-2" style="width:40px;">状态</span>
+                                    {% if last_login_info.status == '成功' %}
+                                        <span class="text-success fw-bold"><i class="bi bi-check-circle-fill me-1"></i>成功</span>
+                                    {% else %}
+                                        <span class="text-danger fw-bold"><i class="bi bi-x-circle-fill me-1"></i>{{ last_login_info.status }}</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    {% endif %}
+                </div>
+
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+
+    <!-- 弹窗部分 -->
+    <div class="modal fade" id="sysAlertModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title fw-bold"><i class="bi bi-info-circle-fill text-primary me-2"></i>提示</h6></div>
+                <div class="modal-body" id="sysAlertMessage"></div>
+                <div class="modal-footer justify-content-center"><button type="button" class="btn btn-primary" style="width: 100px;" data-bs-dismiss="modal">确定</button></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="sysConfirmModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title fw-bold"><i class="bi bi-exclamation-circle-fill text-warning me-2"></i>确认操作</h6></div>
+                <div class="modal-body" id="sysConfirmMessage"></div>
+                <div class="modal-footer d-flex justify-content-end gap-2">
+                    <button type="button" class="btn btn-light border m-0" style="width: 80px;" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-danger m-0" style="width: 80px;" id="sysConfirmBtn">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            const mBtn = document.getElementById('mobileMenuBtn'), sb = document.getElementById('appSidebar'), ov = document.getElementById('sidebarOverlay');
+            const collapseBtn = document.getElementById('sidebarCollapseBtn');
+            const collapseIcon = collapseBtn ? collapseBtn.querySelector('i') : null;
+
+            if(localStorage.getItem('pdx_sidebar_collapsed') === 'true' && window.innerWidth > 768 && sb) {
+                sb.classList.add('collapsed');
+                if(collapseIcon) collapseIcon.className = 'bi bi-list fs-5';
+            }
+
+            if(collapseBtn) {
+                collapseBtn.addEventListener('click', () => {
+                    sb.classList.toggle('collapsed');
+                    const isCollapsed = sb.classList.contains('collapsed');
+                    localStorage.setItem('pdx_sidebar_collapsed', isCollapsed);
+                    collapseIcon.className = isCollapsed ? 'bi bi-list fs-5' : 'bi bi-chevron-left fs-5';
+                });
+            }
+
+            if(mBtn) mBtn.addEventListener('click', () => { sb.classList.add('show'); ov.classList.add('show'); });
+            if(ov) ov.addEventListener('click', () => { sb.classList.remove('show'); ov.classList.remove('show'); });
+
+            window.alert = function(msg) { document.getElementById('sysAlertMessage').innerText = msg; new bootstrap.Modal(document.getElementById('sysAlertModal')).show(); };
+            window.sysConfirm = function(msg, cb) {
+                document.getElementById('sysConfirmMessage').innerText = msg;
+                const m = new bootstrap.Modal(document.getElementById('sysConfirmModal')), b = document.getElementById('sysConfirmBtn');
+                b.onclick = function() { m.hide(); if(cb) cb(); }; m.show();
+            };
+
+            document.addEventListener('click', function(e) {
+                const t = e.target.closest('[onclick*="confirm("]');
+                if (t && !t.dataset.confirmed) {
+                    e.preventDefault(); e.stopPropagation();
+                    const msg = (t.getAttribute('onclick').match(/confirm\(['"](.*?)['"]\)/) || [])[1] || '确认执行此操作？';
+                    window.sysConfirm(msg, function() {
+                        t.dataset.confirmed = 'true';
+                        if (t.tagName === 'A' && t.href && !t.href.startsWith('javascript:')) window.location.href = t.href;
+                        else { const s = t.getAttribute('onclick').replace(/return\s+confirm\(['"].*?['"]\);?/g, ''); if (s.trim()) new Function(s).call(t); }
+                    });
+                }
+            }, true);
+
+            document.querySelectorAll('.toast:not(#lastLoginToast)').forEach(t => new bootstrap.Toast(t, { delay: 3000 }).show());
+
+            // 自动加载登录信息弹窗
+            var loginToastEl = document.getElementById('lastLoginToast');
+            if(loginToastEl) { new bootstrap.Toast(loginToastEl, {delay: 5000}).show(); }
+
+            const langSetting = "{{ sys_lang }}";
+            let actualLang = langSetting;
+            if (langSetting === 'auto') {
+                actualLang = navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+            }
+            if (actualLang === 'en') {
+                const i18n = {
+                    "派大星面板": "Patrick Panel", "定时任务": "Cron Jobs", "环境变量": "Environments",
+                    "配置文件": "Config File", "脚本管理": "Scripts", "依赖管理": "Dependencies",
+                    "系统日志": "System Logs", "系统设置": "Settings", "退出登录": "Logout",
+                    "提示": "Notice", "确认操作": "Confirm Action", "确定": "OK",
+                    "取消": "Cancel", "确认": "Confirm", "保存": "Save", "新建任务": "Add Job",
+                    "序号": "No.", "任务名称": "Task Name", "执行指令": "Command", "状态": "Status",
+                    "操作": "Actions", "日志": "Log", "停止": "Stop", "运行": "Run"
+                };
+                function translateNode(node) {
+                    if (node.nodeType === 3) {
+                        let text = node.nodeValue.trim();
+                        if (i18n[text]) { node.nodeValue = node.nodeValue.replace(text, i18n[text]); }
+                    } else if (node.nodeType === 1 && node.nodeName !== 'SCRIPT' && node.nodeName !== 'STYLE') {
+                        node.childNodes.forEach(translateNode);
+                    }
+                }
+                translateNode(document.body);
+            }
+        });
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
