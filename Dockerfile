@@ -38,4 +38,4 @@ VOLUME ["/app/data"]
 EXPOSE 5000
 
 # 启动命令：使用 gunicorn 结合线程模式运行 Flask-SocketIO
-CMD ["gunicorn", "--worker-class", "gthread", "--threads", "10", "--bind", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "--worker-class", "gthread", "--threads", "10", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info", "app:app"]
