@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir -r requirements.txt gunicorn
 COPY . .
 
 # 声明持久化数据卷（包含用户数据和动态安装的依赖环境）
-VOLUME ["/app/data", "/app/deps_env"]
+VOLUME ["/app/data"]
 
 # 暴露 5000 端口
 EXPOSE 5000

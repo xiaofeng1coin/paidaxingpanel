@@ -18,6 +18,7 @@ import struct
 import hashlib
 import random
 import string
+import shutil  # 【新增】用于文件复制操作
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
@@ -38,7 +39,7 @@ LOGS_DIR = os.path.join(DATA_DIR, 'logs')
 DB_DIR = os.path.join(DATA_DIR, 'db')
 CONFIG_DIR = os.path.join(DATA_DIR, 'config')
 
-DEPS_ENV_DIR = os.path.join(BASE_DIR, 'deps_env')
+DEPS_ENV_DIR = os.path.join(DATA_DIR, 'deps_env')
 NODE_DIR = os.path.join(DEPS_ENV_DIR, 'nodejs')
 PYTHON_DIR = os.path.join(DEPS_ENV_DIR, 'python')
 LINUX_DIR = os.path.join(DEPS_ENV_DIR, 'linux')
@@ -1170,6 +1171,22 @@ with app.app_context():
     console.error('无法调用 sendNotify.js (如需使用通知，请在面板脚本管理中上传该文件):', e.message);
     process.exit(1);
 }""")
+
+    # ==========【新增：自动复制初始化 js 脚本】==========
+    init_scripts_dir = os.path.join(BASE_DIR, 'init_scripts')
+    if os.path.exists(init_scripts_dir):
+        for file_name in os.listdir(init_scripts_dir):
+            if file_name.endswith('.js'):
+                src_file = os.path.join(init_scripts_dir, file_name)
+                dst_file = os.path.join(SCRIPTS_DIR, file_name)
+                # 如果目标目录(data/scripts)不存在该文件，则复制过去（防止覆盖用户之后在面板中做的修改）
+                if not os.path.exists(dst_file):
+                    try:
+                        shutil.copy2(src_file, dst_file)
+                        print(f"Initialized script: {file_name}")
+                    except Exception as e:
+                        print(f"Failed to copy {file_name}: {str(e)}")
+    # ====================================================
 
 # =====================================================================
 # 新增：原生终端 CLI 快捷命令拦截 (支持 unblock, untfa, resetpwd)
