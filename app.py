@@ -31,7 +31,8 @@ from sqlalchemy import text
 
 from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog
 
-BASE_DIR = os.path.abspath(os.path.dirname(__name__))
+# 【修复处 1】这里将 __name__ 改为了 __file__，确保在 Gunicorn 下能绝对精确定位到当前目录
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 
 SCRIPTS_DIR = os.path.join(DATA_DIR, 'scripts')
@@ -1172,21 +1173,25 @@ with app.app_context():
     process.exit(1);
 }""")
 
-    # ==========【新增：自动复制初始化 js 脚本】==========
-    init_scripts_dir = os.path.join(BASE_DIR, 'init_scripts')
-    if os.path.exists(init_scripts_dir):
-        for file_name in os.listdir(init_scripts_dir):
-            if file_name.endswith('.js'):
-                src_file = os.path.join(init_scripts_dir, file_name)
-                dst_file = os.path.join(SCRIPTS_DIR, file_name)
-                # 如果目标目录(data/scripts)不存在该文件，则复制过去（防止覆盖用户之后在面板中做的修改）
-                if not os.path.exists(dst_file):
-                    try:
-                        shutil.copy2(src_file, dst_file)
-                        print(f"Initialized script: {file_name}")
-                    except Exception as e:
-                        print(f"Failed to copy {file_name}: {str(e)}")
-    # ====================================================
+    # ==========【修复：自动复制初始化 js 脚本，兼容中划线并强制输出日志】==========
+    for folder_name in ['init_scripts', 'init-scripts']:
+        init_scripts_dir = os.path.join(BASE_DIR, folder_name)
+        if os.path.exists(init_scripts_dir):
+            for file_name in os.listdir(init_scripts_dir):
+                if file_name.endswith('.js'):
+                    src_file = os.path.join(init_scripts_dir, file_name)
+                    dst_file = os.path.join(SCRIPTS_DIR, file_name)
+                    # 如果目标目录(data/scripts)不存在该文件，则复制过去（防止覆盖用户之后在面板中做的修改）
+                    if not os.path.exists(dst_file):
+                        try:
+                            shutil.copy2(src_file, dst_file)
+                            # flush=True 保证能立刻在 docker logs 中看到输出
+                            print(f"[System] ✅ 初始化脚本已自动复制: {file_name}", flush=True)
+                        except Exception as e:
+                            print(f"[System] ❌ 复制脚本 {file_name} 失败: {str(e)}", flush=True)
+                    else:
+                        print(f"[System] ⚡ 脚本已存在，跳过复制: {file_name}", flush=True)
+    # =========================================================================
 
 # =====================================================================
 # 新增：原生终端 CLI 快捷命令拦截 (支持 unblock, untfa, resetpwd)
