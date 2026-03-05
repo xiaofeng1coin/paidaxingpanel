@@ -19,6 +19,7 @@ import hashlib
 import random
 import string
 import shutil  # 【新增】用于文件复制操作
+import secrets
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
@@ -102,7 +103,7 @@ login_manager.login_view = 'login'
 
 
 def generate_totp_secret():
-    return ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ234567') for _ in range(16))
+    return ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ234567') for _ in range(16))
 
 
 def verify_totp(secret, code):
@@ -163,6 +164,25 @@ def global_security_check():
         if not referer or request.host not in referer:
             flash("为保证安全，禁止直接输入地址访问未授权子页面，已退回首页。")
             return redirect(url_for('tasks'))
+
+
+@app.after_request
+def add_security_headers(response):
+    # 【安全修复】全局注入 HTTP 安全头，防御 ZAP 扫描出的点击劫持、MIME嗅探等问题
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    # 定制 CSP：允许 Monaco Editor 运行 Worker，允许 Socket.io 建立 WebSocket 连接
+    csp_policy = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self' ws: wss:; "
+        "worker-src 'self' blob:;"
+    )
+    response.headers['Content-Security-Policy'] = csp_policy
+    return response
 
 
 def send_sys_notify(title, content):
@@ -285,6 +305,8 @@ def execute_task(task_id):
 
                 for line in process.stdout:
                     f.write(line)
+                    f.flush()  # 【新增】：强制将内存中的日志立即写入硬盘
+                    os.fsync(f.fileno())  # 【新增】：确保操作系统也立刻落盘，防止跨线程读取为空
                     socketio.emit('log_stream', {'task_id': task.id, 'data': line})
                 process.wait()
                 running_processes.pop(task_id, None)
@@ -676,6 +698,8 @@ def execute_dependency_cmd(dep_id, action):
                                            encoding='utf-8', errors='replace')
                 for line in process.stdout:
                     f.write(line)
+                    f.flush()               # 【新增】
+                    os.fsync(f.fileno())    # 【新增】
                     socketio.emit('log_stream', {'task_id': stream_id, 'data': line})
                 process.wait()
             current_dep = Dependency.query.get(dep_id)
@@ -1156,9 +1180,16 @@ with app.app_context():
         pass
 
     ql_env_path = os.path.join(SCRIPTS_DIR, 'ql_env.js')
-    if not os.path.exists(ql_env_path):
-        with open(ql_env_path, 'w', encoding='utf-8') as f:
-            f.write('if (!console.logErr) { console.logErr = function(e) { console.error(e.message || e); }; }\n')
+    # 强制重新生成 ql_env.js，加入控制台广告拦截逻辑
+    with open(ql_env_path, 'w', encoding='utf-8') as f:
+        f.write("""if (!console.logErr) { console.logErr = function(e) { console.error(e.message || e); }; }
+// 拦截并隐藏 dotenv 的广告提示
+const _log = console.log;
+console.log = function(...args) {
+    if (typeof args[0] === 'string' && args[0].includes('[dotenv@') && args[0].includes('tip:')) return;
+    _log.apply(console, args);
+};
+""")
 
     sys_notify_path = os.path.join(SCRIPTS_DIR, 'sys_notify.js')
     if not os.path.exists(sys_notify_path):
