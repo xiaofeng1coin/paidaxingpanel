@@ -72,6 +72,7 @@
                     <option value="dingtalk">钉钉 (DingTalk)</option>
                     <option value="pushplus">Push Plus (推送加)</option>
                     <option value="serverchan">Server酱</option>
+                    <option value="wxpusher">WxPusher (微信推送)</option>
                 </select>
 
                 <div id="notify-params-area"></div>
@@ -176,6 +177,12 @@
             } else if (type === 'serverchan') {
                 area.style.display = 'block';
                 area.innerHTML = `<div><input type="text" id="sc_key" class="form-control form-control-sm" placeholder="PUSH_KEY" required></div>`;
+            } else if (type === 'wxpusher') {
+                area.style.display = 'block';
+                area.innerHTML = `
+                    <div class="mb-2"><input type="text" id="wx_token" class="form-control form-control-sm" placeholder="WXPUSHER_APP_TOKEN" required></div>
+                    <div><input type="text" id="wx_uid" class="form-control form-control-sm" placeholder="WXPUSHER_UID" required></div>
+                `;
             } else {
                 area.style.display = 'none';
             }
@@ -201,6 +208,10 @@
                 } else if (payload.notify_type === 'serverchan') {
                     payload.PUSH_KEY = document.getElementById('sc_key').value.trim();
                     if(!payload.PUSH_KEY) return showError("请填写 Server酱 PUSH_KEY");
+                } else if (payload.notify_type === 'wxpusher') {
+                    payload.WXPUSHER_APP_TOKEN = document.getElementById('wx_token').value.trim();
+                    payload.WXPUSHER_UID = document.getElementById('wx_uid').value.trim();
+                    if(!payload.WXPUSHER_APP_TOKEN || !payload.WXPUSHER_UID) return showError("请完整填写 WxPusher 参数");
                 }
             }
 

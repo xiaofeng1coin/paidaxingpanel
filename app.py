@@ -157,7 +157,8 @@ def global_security_check():
 
     allowed_direct_endpoints = [
         'login', 'install', 'logout', 'tasks', 'static',
-        'scripts_editor', 'scripts_debug', 'api_debug_run', 'logs', 'deps', 'envs', 'config_editor', 'settings'
+        'scripts_editor', 'scripts_debug', 'api_debug_run', 'logs', 'deps', 'envs', 'config_editor', 'settings',
+        'api_delete_logs'
     ]
     if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
         referer = request.headers.get("Referer")
@@ -206,6 +207,16 @@ def send_sys_notify(title, content):
                 env['PUSH_PLUS_TOKEN'] = configs.get('PUSH_PLUS_TOKEN', '')
             elif notify_type == 'serverchan':
                 env['PUSH_KEY'] = configs.get('PUSH_KEY', '')
+            elif notify_type == 'wxpusher':
+                # 兼容市面上各种变种的 sendNotify.js
+                wx_token = configs.get('WXPUSHER_APP_TOKEN', '')
+                wx_uid = configs.get('WXPUSHER_UID', '')
+                env['WXPUSHER_APP_TOKEN'] = wx_token
+                env['WXPUSHER_UID'] = wx_uid
+                env['WP_APP_TOKEN'] = wx_token
+                env['WP_UIDS'] = wx_uid
+                env['WP_APP_TOKEN_ONE'] = wx_token
+                env['WP_UIDS_ONE'] = wx_uid
 
             sys_notify_js = os.path.join(SCRIPTS_DIR, 'sys_notify.js')
             if os.path.exists(sys_notify_js):
@@ -375,6 +386,9 @@ def install():
             db.session.add(SystemConfig(key='PUSH_PLUS_TOKEN', value=data.get('PUSH_PLUS_TOKEN', '')))
         elif notify_type == 'serverchan':
             db.session.add(SystemConfig(key='PUSH_KEY', value=data.get('PUSH_KEY', '')))
+        elif notify_type == 'wxpusher':
+            db.session.add(SystemConfig(key='WXPUSHER_APP_TOKEN', value=data.get('WXPUSHER_APP_TOKEN', '')))
+            db.session.add(SystemConfig(key='WXPUSHER_UID', value=data.get('WXPUSHER_UID', '')))
 
         db.session.add(LoginSecurity(failed_count=0))
         db.session.commit()
@@ -1035,8 +1049,41 @@ def logs():
 @login_required
 def settings():
     configs = {c.key: c.value for c in SystemConfig.query.all()}
-    logs = LoginLog.query.order_by(LoginLog.id.desc()).limit(50).all()
-    return render_template('settings.html', config=configs, logs=logs)
+    
+    # 登录日志分页与状态筛选逻辑
+    page = request.args.get('page', 1, type=int)
+    status_filter = request.args.get('status', 'all')
+    per_page = request.args.get('per_page', 20, type=int)
+    
+    query = LoginLog.query
+    if status_filter != 'all':
+        query = query.filter(LoginLog.status == status_filter)
+        
+    pagination = query.order_by(LoginLog.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    
+    return render_template('settings.html', config=configs, pagination=pagination, status_filter=status_filter, per_page=per_page)
+
+
+@app.route('/api/logs/delete', methods=['POST'])
+@login_required
+def api_delete_logs():
+    data = request.json
+    del_type = data.get('type')
+    
+    if del_type == 'selected':
+        ids = data.get('ids', [])
+        if ids:
+            LoginLog.query.filter(LoginLog.id.in_(ids)).delete(synchronize_session=False)
+            db.session.commit()
+    elif del_type == 'status':
+        status = data.get('status', 'all')
+        if status == 'all':
+            LoginLog.query.delete()
+        else:
+            LoginLog.query.filter_by(status=status).delete()
+        db.session.commit()
+        
+    return jsonify({"status": "success"})
 
 
 @app.route('/settings/security', methods=['POST'])

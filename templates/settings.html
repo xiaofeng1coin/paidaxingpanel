@@ -2,6 +2,13 @@
 
 {% block styles %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+<style>
+/* 针对新增登录日志分页组件的暗黑模式适配 */
+html.dark-theme .page-link { background-color: #1E293B; border-color: #334155; color: #94A3B8; }
+html.dark-theme .page-link:hover { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .page-item.active .page-link { background-color: #3B82F6; border-color: #3B82F6; color: #fff; }
+html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; color: #475569; }
+</style>
 {% endblock %}
 
 {% block content %}
@@ -77,6 +84,7 @@
                         <option value="dingtalk" {% if config.get('notify_type') == 'dingtalk' %}selected{% endif %}>钉钉 (DingTalk)</option>
                         <option value="pushplus" {% if config.get('notify_type') == 'pushplus' %}selected{% endif %}>Push Plus</option>
                         <option value="serverchan" {% if config.get('notify_type') == 'serverchan' %}selected{% endif %}>Server酱</option>
+                        <option value="wxpusher" {% if config.get('notify_type') == 'wxpusher' %}selected{% endif %}>WxPusher (微信推送)</option>
                     </select>
                 </div>
                 <div id="notify-params" style="max-width: 300px; display: none;">
@@ -94,41 +102,112 @@
                     <div class="mb-3 sc-param">
                         <input type="text" name="PUSH_KEY" class="form-control" placeholder="PUSH_KEY" value="{{ config.get('PUSH_KEY', '') }}">
                     </div>
+                    <div class="mb-3 wx-param">
+                        <input type="text" name="WXPUSHER_APP_TOKEN" class="form-control mb-2" placeholder="WXPUSHER_APP_TOKEN" value="{{ config.get('WXPUSHER_APP_TOKEN', '') }}">
+                        <input type="text" name="WXPUSHER_UID" class="form-control" placeholder="WXPUSHER_UID" value="{{ config.get('WXPUSHER_UID', '') }}">
+                    </div>
                 </div>
                 <button type="submit" class="btn btn-primary" style="width: 80px;">保存</button>
             </form>
         </div></div>
     </div>
 
-    <!-- 登录日志 -->
+    <!-- 登录日志 (已修改为支持分页和批量删除筛选) -->
     <div class="tab-pane fade" id="tab-logs">
-        <div class="card border-0 mb-3"><div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover align-middle">
-                    <thead><tr><th>序号</th><th>登录时间</th><th>登录地址</th><th>登录IP</th><th>登录设备</th><th>登录状态</th></tr></thead>
-                    <tbody>
-                        {% for log in logs %}
-                        <tr>
-                            <td class="text-muted fw-bold">{{ loop.index }}</td>
-                            <td class="font-monospace" style="font-size:13px;">{{ log.login_time }}</td>
-                            <td>{{ log.address }}</td>
-                            <td class="font-monospace" style="font-size:13px;">{{ log.ip }}</td>
-                            <td style="max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ log.device }}">{{ log.device }}</td>
-                            <td>
-                                {% if log.status == '成功' %}
-                                <span class="badge-soft-status" style="background:#ECFDF5;color:#059669;">成功</span>
-                                {% else %}
-                                <span class="badge-soft-status" style="background:#FEF2F2;color:#DC2626;">{{ log.status }}</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr><td colspan="6" class="text-center py-4 text-muted">暂无日志</td></tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+        <div class="card border-0 mb-3">
+            <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center py-3 flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <h6 class="mb-0 fw-bold me-2">系统登录日志</h6>
+                    <button class="btn btn-outline-danger btn-sm" onclick="deleteSelectedLogs()"><i class="bi bi-trash me-1"></i>删除选中</button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="deleteAllByStatus()"><i class="bi bi-trash2 me-1"></i>清空当前分类</button>
+                </div>
+                <form method="GET" action="/settings" class="d-flex align-items-center m-0 gap-2" id="logFilterForm">
+                    <input type="hidden" name="tab" value="logs">
+                    <!-- 【修复处】将宽度从 90px 修改为 110px 解决文字被下拉箭头遮挡问题 -->
+                    <select name="per_page" class="form-select form-select-sm" style="width: 110px;" onchange="document.getElementById('logFilterForm').submit();">
+                        <option value="10" {% if per_page == 10 %}selected{% endif %}>10 条/页</option>
+                        <option value="20" {% if per_page == 20 %}selected{% endif %}>20 条/页</option>
+                        <option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option>
+                        <option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option>
+                    </select>
+                    <select name="status" class="form-select form-select-sm" style="width: 120px;" onchange="document.getElementById('logFilterForm').submit();">
+                        <option value="all" {% if status_filter == 'all' %}selected{% endif %}>全部状态</option>
+                        <option value="成功" {% if status_filter == '成功' %}selected{% endif %}>成功</option>
+                        <option value="失败" {% if status_filter == '失败' %}selected{% endif %}>失败</option>
+                        <option value="被锁定" {% if status_filter == '被锁定' %}selected{% endif %}>被锁定</option>
+                    </select>
+                </form>
             </div>
-        </div></div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th style="padding-left: 20px; width: 40px;">
+                                    <input type="checkbox" class="form-check-input" onclick="toggleAllLogs(this)">
+                                </th>
+                                <th>序号</th>
+                                <th>登录时间</th>
+                                <th>登录地址</th>
+                                <th>登录IP</th>
+                                <th>登录设备</th>
+                                <th>登录状态</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for log in pagination.items %}
+                            <tr>
+                                <td style="padding-left: 20px;">
+                                    <input type="checkbox" class="form-check-input log-checkbox" value="{{ log.id }}">
+                                </td>
+                                <td class="text-muted fw-bold">{{ (pagination.page - 1) * pagination.per_page + loop.index }}</td>
+                                <td class="font-monospace" style="font-size:13px;">{{ log.login_time }}</td>
+                                <td>{{ log.address }}</td>
+                                <td class="font-monospace" style="font-size:13px;">{{ log.ip }}</td>
+                                <td style="max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ log.device }}">{{ log.device }}</td>
+                                <td>
+                                    {% if log.status == '成功' %}
+                                    <span class="badge-soft-status" style="background:#ECFDF5;color:#059669;">成功</span>
+                                    {% else %}
+                                    <span class="badge-soft-status" style="background:#FEF2F2;color:#DC2626;">{{ log.status }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="7" class="text-center py-5 text-muted">暂无日志</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- 分页条 -->
+            {% if pagination.pages > 1 %}
+            <div class="card-footer bg-white border-top py-3 d-flex justify-content-center">
+                <nav>
+                    <ul class="pagination pagination-sm m-0">
+                        <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+                            <a class="page-link" href="{{ url_for('settings', tab='logs', status=status_filter, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
+                        </li>
+                        
+                        {% for p in pagination.iter_pages(left_edge=1, left_current=2, right_current=2, right_edge=1) %}
+                            {% if p %}
+                                <li class="page-item {% if p == pagination.page %}active{% endif %}">
+                                    <a class="page-link" href="{{ url_for('settings', tab='logs', status=status_filter, per_page=per_page, page=p) }}">{{ p }}</a>
+                                </li>
+                            {% else %}
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            {% endif %}
+                        {% endfor %}
+                        
+                        <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+                            <a class="page-link" href="{{ url_for('settings', tab='logs', status=status_filter, per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}">下一页</a>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
+            {% endif %}
+        </div>
     </div>
 
     <!-- 依赖设置 -->
@@ -330,6 +409,45 @@
         }
     }
 
+    // 登录日志全选复选框
+    function toggleAllLogs(source) {
+        const checkboxes = document.querySelectorAll('.log-checkbox');
+        checkboxes.forEach(cb => cb.checked = source.checked);
+    }
+
+    // 删除选中的日志
+    function deleteSelectedLogs() {
+        const checkboxes = document.querySelectorAll('.log-checkbox:checked');
+        const ids = Array.from(checkboxes).map(cb => parseInt(cb.value));
+        if(ids.length === 0) return window.alert('请先勾选需要删除的日志记录');
+        
+        window.sysConfirm(`确定要删除选中的 ${ids.length} 条日志记录吗？此操作不可逆！`, () => {
+            fetch('/api/logs/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'selected', ids: ids })
+            }).then(r => r.json()).then(d => {
+                if(d.status === 'success') location.reload();
+            });
+        });
+    }
+
+    // 清空当前分类下的所有日志
+    function deleteAllByStatus() {
+        const status = document.querySelector('select[name="status"]').value;
+        const statusText = status === 'all' ? '所有' : status;
+        
+        window.sysConfirm(`⚠️ 危险操作！确定要清空【${statusText}】状态下的全部日志记录吗？`, () => {
+            fetch('/api/logs/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'status', status: status })
+            }).then(r => r.json()).then(d => {
+                if(d.status === 'success') location.reload();
+            });
+        });
+    }
+
     function toggleNotify() {
         const type = document.getElementById('notify_type').value;
         const paramsDiv = document.getElementById('notify-params');
@@ -341,6 +459,7 @@
             document.querySelectorAll('.dt-param').forEach(el => el.style.display = type === 'dingtalk' ? 'block' : 'none');
             document.querySelectorAll('.pp-param').forEach(el => el.style.display = type === 'pushplus' ? 'block' : 'none');
             document.querySelectorAll('.sc-param').forEach(el => el.style.display = type === 'serverchan' ? 'block' : 'none');
+            document.querySelectorAll('.wx-param').forEach(el => el.style.display = type === 'wxpusher' ? 'block' : 'none');
         }
     }
 
