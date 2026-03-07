@@ -18,21 +18,31 @@ import struct
 import hashlib
 import random
 import string
-import shutil  # 【新增】用于文件复制操作
+import shutil  
 import secrets
+import logging 
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename  # 【安全修复】新增：用于防止目录穿越漏洞
+from werkzeug.utils import secure_filename  
 from flask_socketio import SocketIO
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import text
 
+# ----------------- 调试日志配置 -----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+aps_logger = logging.getLogger('apscheduler')
+aps_logger.setLevel(logging.DEBUG)
+# ---------------------------------------------------
+
 from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog
 
-# 【修复处 1】这里将 __name__ 改为了 __file__，确保在 Gunicorn 下能绝对精确定位到当前目录
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 
@@ -158,7 +168,7 @@ def global_security_check():
     allowed_direct_endpoints = [
         'login', 'install', 'logout', 'tasks', 'static',
         'scripts_editor', 'scripts_debug', 'api_debug_run', 'logs', 'deps', 'envs', 'config_editor', 'settings',
-        'api_delete_logs'
+        'api_delete_logs', 'api_task_batch'
     ]
     if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
         referer = request.headers.get("Referer")
@@ -169,10 +179,8 @@ def global_security_check():
 
 @app.after_request
 def add_security_headers(response):
-    # 【安全修复】全局注入 HTTP 安全头，防御 ZAP 扫描出的点击劫持、MIME嗅探等问题
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    # 定制 CSP：允许 Monaco Editor 运行 Worker，允许 Socket.io 建立 WebSocket 连接
     csp_policy = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
@@ -208,7 +216,6 @@ def send_sys_notify(title, content):
             elif notify_type == 'serverchan':
                 env['PUSH_KEY'] = configs.get('PUSH_KEY', '')
             elif notify_type == 'wxpusher':
-                # 兼容市面上各种变种的 sendNotify.js
                 wx_token = configs.get('WXPUSHER_APP_TOKEN', '')
                 wx_uid = configs.get('WXPUSHER_UID', '')
                 env['WXPUSHER_APP_TOKEN'] = wx_token
@@ -237,7 +244,6 @@ def get_combined_env():
     run_env['PYTHONPATH'] = f"{PYTHON_DIR}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else PYTHON_DIR
 
     with app.app_context():
-        # 修复：注入运行时环境也按 position 顺序注入
         for e in Env.query.filter((Env.is_disabled == 0) | (Env.is_disabled == None)).order_by(
                 Env.position.asc()).all():
             run_env[e.name] = str(e.value)
@@ -265,6 +271,7 @@ def execute_task(task_id):
             if not task or getattr(task, 'is_disabled', 0) == 1: return
 
             start_time = time.time()
+            start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             run_env = get_combined_env()
 
             timeout_str = run_env.get('TASK_TIMEOUT', '1')
@@ -279,22 +286,27 @@ def execute_task(task_id):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_file_path = os.path.join(task_log_dir, f"{timestamp}.log")
 
-            # subprocess 默认使用 shell=False 并以列表形式传参，本身就杜绝了任务命令注入
             filename = task.command.strip()
             cmd_list = ['node', '--require', './ql_env.js', filename] if filename.endswith('.js') else \
                 ['python', filename] if filename.endswith('.py') else \
                     ['bash', filename] if filename.endswith('.sh') else [filename]
 
             task.status = 'Running'
-            task.last_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            task.last_run = start_time_str
             db.session.commit()
 
+            start_msg = f"==============================================\n" \
+                        f"🚀 项目开始执行 | 时间: {start_time_str}\n" \
+                        f"👉 执行指令: {' '.join(cmd_list)}\n" \
+                        f"==============================================\n\n"
+
             socketio.emit('task_status', {'task_id': task.id, 'status': 'Running', 'last_run': task.last_run})
-            socketio.emit('log_stream',
-                          {'task_id': task.id, 'data': f"[{datetime.now()}] 🚀 执行: {' '.join(cmd_list)}\n",
-                           'clear': True})
+            socketio.emit('log_stream', {'task_id': task.id, 'data': start_msg, 'clear': True})
 
             with open(log_file_path, 'w', encoding='utf-8') as f:
+                f.write(start_msg)
+                f.flush()
+                
                 process = subprocess.Popen(cmd_list, shell=False, env=run_env, stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
                                            encoding='utf-8', errors='replace')
@@ -316,15 +328,22 @@ def execute_task(task_id):
 
                 for line in process.stdout:
                     f.write(line)
-                    f.flush()  # 【新增】：强制将内存中的日志立即写入硬盘
-                    os.fsync(f.fileno())  # 【新增】：确保操作系统也立刻落盘，防止跨线程读取为空
+                    f.flush()  
+                    os.fsync(f.fileno())  
                     socketio.emit('log_stream', {'task_id': task.id, 'data': line})
                 process.wait()
                 running_processes.pop(task_id, None)
 
+                end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                end_msg = f"\n==============================================\n" \
+                          f"✅ 项目执行完毕 | 时间: {end_time_str}\n"
+                
                 if process.returncode is not None and process.returncode != -9:
-                    f.write(f"\n✅ 退出码: {process.returncode}\n")
-                    socketio.emit('log_stream', {'task_id': task.id, 'data': f"\n✅ 退出码: {process.returncode}\n"})
+                    end_msg += f"🛑 退出码: {process.returncode}\n"
+                end_msg += f"==============================================\n"
+
+                f.write(end_msg)
+                socketio.emit('log_stream', {'task_id': task.id, 'data': end_msg})
 
             duration = round(time.time() - start_time, 2)
             current_task = Task.query.get(task_id)
@@ -352,7 +371,8 @@ def add_job_to_scheduler(task):
     job_id = f"task_{task.id}"
     if scheduler.get_job(job_id): scheduler.remove_job(job_id)
     try:
-        scheduler.add_job(execute_task, CronTrigger.from_crontab(task.cron), args=[task.id], id=job_id)
+        tz_str = os.environ.get('TZ', 'Asia/Shanghai')
+        scheduler.add_job(execute_task, CronTrigger.from_crontab(task.cron, timezone=tz_str), args=[task.id], id=job_id)
     except:
         pass
 
@@ -564,7 +584,36 @@ def api_2fa_disable():
 @app.route('/')
 @login_required
 def tasks():
-    return render_template('tasks.html', tasks=Task.query.all())
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    status_filter = request.args.get('status', 'all')
+
+    query = Task.query
+    if status_filter == 'normal':
+        query = query.filter((Task.is_disabled == 0) | (Task.is_disabled == None))
+    elif status_filter == 'disabled':
+        query = query.filter(Task.is_disabled == 1)
+
+    pagination = query.order_by(Task.is_disabled.asc(), Task.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+
+    tz_str = os.environ.get('TZ', 'Asia/Shanghai')
+
+    for task in pagination.items:
+        if getattr(task, 'is_disabled', 0) == 1:
+            task.next_run = "已禁用"
+        else:
+            try:
+                trigger = CronTrigger.from_crontab(task.cron, timezone=tz_str)
+                now = datetime.now(trigger.timezone)
+                next_time = trigger.get_next_fire_time(None, now)
+                if next_time:
+                    task.next_run = next_time.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    task.next_run = "无法计算"
+            except Exception:
+                task.next_run = "规则错误"
+
+    return render_template('tasks.html', pagination=pagination, status_filter=status_filter, per_page=per_page)
 
 
 @app.route('/task/add', methods=['POST'])
@@ -621,6 +670,44 @@ def delete_task(id):
     return redirect(url_for('tasks'))
 
 
+@app.route('/api/task/batch', methods=['POST'])
+@login_required
+def api_task_batch():
+    data = request.json
+    action = data.get('action')
+    ids = data.get('ids', [])
+    if not ids:
+        return jsonify({"status": "error"})
+    
+    for task_id in ids:
+        task = Task.query.get(task_id)
+        if not task:
+            continue
+        
+        if action == 'enable':
+            task.is_disabled = 0
+            add_job_to_scheduler(task)
+        elif action == 'disable':
+            task.is_disabled = 1
+            if scheduler.get_job(f"task_{task.id}"): 
+                scheduler.remove_job(f"task_{task.id}")
+        elif action == 'run':
+            if getattr(task, 'is_disabled', 0) == 0 and task_id not in running_processes:
+                threading.Thread(target=execute_task, args=(task_id,)).start()
+        elif action == 'delete':
+            if task_id in running_processes:
+                try:
+                    running_processes[task_id].kill()
+                except:
+                    pass
+            if scheduler.get_job(f"task_{task.id}"): 
+                scheduler.remove_job(f"task_{task.id}")
+            db.session.delete(task)
+            
+    db.session.commit()
+    return jsonify({"status": "success"})
+
+
 @app.route('/api/task/run/<int:id>')
 @login_required
 def api_run_task(id):
@@ -666,7 +753,11 @@ def api_get_task_log(id):
 
 @app.route('/deps')
 @login_required
-def deps(): return render_template('deps.html', dependencies=Dependency.query.all())
+def deps():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    pagination = Dependency.query.order_by(Dependency.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    return render_template('deps.html', pagination=pagination, per_page=per_page)
 
 
 def execute_dependency_cmd(dep_id, action):
@@ -712,8 +803,8 @@ def execute_dependency_cmd(dep_id, action):
                                            encoding='utf-8', errors='replace')
                 for line in process.stdout:
                     f.write(line)
-                    f.flush()               # 【新增】
-                    os.fsync(f.fileno())    # 【新增】
+                    f.flush()               
+                    os.fsync(f.fileno())    
                     socketio.emit('log_stream', {'task_id': stream_id, 'data': line})
                 process.wait()
             current_dep = Dependency.query.get(dep_id)
@@ -743,9 +834,6 @@ def api_install_deps():
     pkg_type = request.form.get('type')
     package = request.form.get('package', '').strip()
 
-    # 【安全修复 1：防止命令注入 RCE】
-    # 限制包名只能包含：大小写字母、数字、下划线、中划线、点、@ (用于版本号或范围名)、/ (用于范围包)
-    # 彻底杜绝使用分号、管道符、反引号等执行服务器毁灭级命令。
     if not package or not re.match(r'^[A-Za-z0-9_\-\.\@\/]+$', package):
         return jsonify({"status": "error", "msg": "依赖包名称包含非法字符，出于安全考虑拒绝执行"})
 
@@ -788,13 +876,11 @@ def envs():
     if request.method == 'POST':
         env_name = request.form.get('name', '').strip()
 
-        # 【新增：拦截重复名称报错】
         if Env.query.filter_by(name=env_name).first():
             flash(f"添加失败：环境变量 '{env_name}' 已存在，名称必须唯一！")
             return redirect(url_for('envs'))
 
         now_str = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-        # 新建时自动放在末尾
         max_pos = db.session.query(db.func.max(Env.position)).scalar() or 0
         db.session.add(
             Env(name=env_name,
@@ -806,9 +892,11 @@ def envs():
         db.session.commit()
         return redirect(url_for('envs'))
 
-    # 获取时根据 position 升序排序
-    all_envs = Env.query.order_by(Env.position.asc(), Env.id.asc()).all()
-    return render_template('envs.html', envs=all_envs)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    pagination = Env.query.order_by(Env.position.asc(), Env.id.asc()).paginate(page=page, per_page=per_page, error_out=False)
+    
+    return render_template('envs.html', pagination=pagination, per_page=per_page)
 
 
 @app.route('/api/env/reorder', methods=['POST'])
@@ -832,7 +920,6 @@ def edit_env(id):
     if env:
         new_name = request.form.get('name', '').strip()
 
-        # 【新增：修改时拦截重名（排除自己本身）】
         existing_env = Env.query.filter_by(name=new_name).first()
         if existing_env and existing_env.id != id:
             flash(f"修改失败：环境变量 '{new_name}' 已被其他项目使用！")
@@ -884,7 +971,6 @@ def config_editor():
 def scripts_editor():
     files = [f for f in os.listdir(SCRIPTS_DIR) if os.path.isfile(os.path.join(SCRIPTS_DIR, f))]
 
-    # 【安全修复 2：防止 GET 目录穿越读取系统文件】
     raw_current_file = request.args.get('file', files[0] if files else 'new_script.py')
     current_file = secure_filename(raw_current_file)
 
@@ -892,7 +978,6 @@ def scripts_editor():
     if request.method == 'POST':
         raw_filename = request.form.get('filename')
         if raw_filename:
-            # 【安全修复 3：防止 POST 目录穿越覆写系统文件】
             filename_to_save = secure_filename(raw_filename)
             with open(os.path.join(SCRIPTS_DIR, filename_to_save), 'w', encoding='utf-8') as f:
                 f.write(request.form.get('content').replace('\r\n', '\n'))
@@ -908,7 +993,6 @@ def scripts_editor():
 def scripts_debug():
     files = [f for f in os.listdir(SCRIPTS_DIR) if os.path.isfile(os.path.join(SCRIPTS_DIR, f))]
 
-    # 【安全修复 4：GET 目录穿越防御】
     raw_current_file = request.args.get('file', files[0] if files else 'new_script.py')
     current_file = secure_filename(raw_current_file)
 
@@ -955,7 +1039,6 @@ def api_debug_run():
     raw_filename = request.form.get('filename')
     if not raw_filename: return jsonify({"status": "error"})
 
-    # 【安全修复 5：防止黑客发送非法文件名执行无关脚本】
     filename = secure_filename(raw_filename)
 
     stream_id = f"debug_{int(time.time())}"
@@ -971,7 +1054,6 @@ def check_script_syntax():
     if not raw_filename or not content.strip():
         return jsonify({"status": "ok", "msg": ""})
 
-    # 【安全修复 6：同样清理文件名】
     filename = secure_filename(raw_filename)
 
     try:
@@ -1033,9 +1115,10 @@ def logs():
     content = "请在左侧选择需要查看的日志..."
 
     if raw_current_folder and raw_current_file:
-        # 【安全修复 7：防止通过日志路由读取系统核心日志文件】
-        current_folder = secure_filename(raw_current_folder)
-        current_file = secure_filename(raw_current_file)
+        # 移除原先过度严格的 secure_filename 保护，由于包含了文件夹名字
+        # 这里仅替换掉越权字符保证相对路径的安全性
+        current_folder = raw_current_folder.replace('..', '').replace('/', '').replace('\\', '')
+        current_file = raw_current_file.replace('..', '').replace('/', '').replace('\\', '')
 
         filepath = os.path.join(LOGS_DIR, current_folder, current_file)
         if os.path.exists(filepath):
@@ -1050,7 +1133,6 @@ def logs():
 def settings():
     configs = {c.key: c.value for c in SystemConfig.query.all()}
     
-    # 登录日志分页与状态筛选逻辑
     page = request.args.get('page', 1, type=int)
     status_filter = request.args.get('status', 'all')
     per_page = request.args.get('per_page', 20, type=int)
@@ -1176,61 +1258,58 @@ def auto_clean_logs():
             pass
 
 
-with app.app_context():
-    db.create_all()
+def run_scheduler_forever():
+    with app.app_context():
+        db.create_all()
 
-    engine = db.engines['tasks']
-    try:
-        with engine.connect() as conn:
-            conn.execute(text('SELECT last_duration FROM task LIMIT 1'))
-    except Exception:
+        engine = db.engines['tasks']
         try:
-            with engine.begin() as conn:
-                conn.execute(text('ALTER TABLE task ADD COLUMN last_duration VARCHAR(20) DEFAULT "-"'))
-                conn.execute(text('ALTER TABLE task ADD COLUMN is_disabled INTEGER DEFAULT 0'))
-            print("Successfully migrated tasks.db with new columns.")
-        except Exception as e:
-            pass
-
-    env_engine = db.engines['envs']
-    try:
-        with env_engine.connect() as conn:
-            conn.execute(text('SELECT is_disabled FROM env LIMIT 1'))
-    except Exception:
-        try:
-            with env_engine.begin() as conn:
-                conn.execute(text('ALTER TABLE env ADD COLUMN is_disabled INTEGER DEFAULT 0'))
-                conn.execute(text('ALTER TABLE env ADD COLUMN updated_at VARCHAR(50) DEFAULT "-"'))
-            print("Successfully migrated envs.db with new columns.")
+            with engine.connect() as conn:
+                conn.execute(text('SELECT last_duration FROM task LIMIT 1'))
         except Exception:
-            pass
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text('ALTER TABLE task ADD COLUMN last_duration VARCHAR(20) DEFAULT "-"'))
+                    conn.execute(text('ALTER TABLE task ADD COLUMN is_disabled INTEGER DEFAULT 0'))
+                print("Successfully migrated tasks.db with new columns.")
+            except Exception:
+                pass
 
-    # 【修复：添加对环境变量排序 position 字段的自动检测与数据库迁移】
-    try:
-        with env_engine.connect() as conn:
-            conn.execute(text('SELECT position FROM env LIMIT 1'))
-    except Exception:
+        env_engine = db.engines['envs']
         try:
-            with env_engine.begin() as conn:
-                conn.execute(text('ALTER TABLE env ADD COLUMN position INTEGER DEFAULT 0'))
-                # 默认将旧数据的排序值设为与 ID 相同
-                conn.execute(text('UPDATE env SET position = id'))
-            print("Successfully migrated envs.db with position column.")
+            with env_engine.connect() as conn:
+                conn.execute(text('SELECT is_disabled FROM env LIMIT 1'))
         except Exception:
+            try:
+                with env_engine.begin() as conn:
+                    conn.execute(text('ALTER TABLE env ADD COLUMN is_disabled INTEGER DEFAULT 0'))
+                    conn.execute(text('ALTER TABLE env ADD COLUMN updated_at VARCHAR(50) DEFAULT "-"'))
+                print("Successfully migrated envs.db with new columns.")
+            except Exception:
+                pass
+
+        try:
+            with env_engine.connect() as conn:
+                conn.execute(text('SELECT position FROM env LIMIT 1'))
+        except Exception:
+            try:
+                with env_engine.begin() as conn:
+                    conn.execute(text('ALTER TABLE env ADD COLUMN position INTEGER DEFAULT 0'))
+                    conn.execute(text('UPDATE env SET position = id'))
+                print("Successfully migrated envs.db with position column.")
+            except Exception:
+                pass
+
+        try:
+            Task.query.filter_by(status='Running').update({'status': 'Idle'})
+            Dependency.query.filter(Dependency.status.in_(['Installing', 'Uninstalling'])).update({'status': 'Error'})
+            db.session.commit()
+        except:
             pass
 
-    try:
-        Task.query.filter_by(status='Running').update({'status': 'Idle'})
-        Dependency.query.filter(Dependency.status.in_(['Installing', 'Uninstalling'])).update({'status': 'Error'})
-        db.session.commit()
-    except:
-        pass
-
-    ql_env_path = os.path.join(SCRIPTS_DIR, 'ql_env.js')
-    # 强制重新生成 ql_env.js，加入控制台广告拦截逻辑
-    with open(ql_env_path, 'w', encoding='utf-8') as f:
-        f.write("""if (!console.logErr) { console.logErr = function(e) { console.error(e.message || e); }; }
-// 拦截并隐藏 dotenv 的广告提示
+        ql_env_path = os.path.join(SCRIPTS_DIR, 'ql_env.js')
+        with open(ql_env_path, 'w', encoding='utf-8') as f:
+            f.write("""if (!console.logErr) { console.logErr = function(e) { console.error(e.message || e); }; }
 const _log = console.log;
 console.log = function(...args) {
     if (typeof args[0] === 'string' && args[0].includes('[dotenv@') && args[0].includes('tip:')) return;
@@ -1238,42 +1317,79 @@ console.log = function(...args) {
 };
 """)
 
-    sys_notify_path = os.path.join(SCRIPTS_DIR, 'sys_notify.js')
-    if not os.path.exists(sys_notify_path):
-        with open(sys_notify_path, 'w', encoding='utf-8') as f:
-            f.write("""try {
+        sys_notify_path = os.path.join(SCRIPTS_DIR, 'sys_notify.js')
+        if not os.path.exists(sys_notify_path):
+            with open(sys_notify_path, 'w', encoding='utf-8') as f:
+                f.write("""try {
     const { sendNotify } = require('./sendNotify.js');
     const title = process.argv[2];
     const content = process.argv[3];
     sendNotify(title, content, {}, '').then(() => process.exit(0)).catch(() => process.exit(1));
 } catch(e) {
-    console.error('无法调用 sendNotify.js (如需使用通知，请在面板脚本管理中上传该文件):', e.message);
+    console.error('无法调用 sendNotify.js:', e.message);
     process.exit(1);
 }""")
 
-    # ==========【修复：自动复制初始化 js 脚本，兼容中划线并强制输出日志】==========
-    for folder_name in ['init_scripts', 'init-scripts']:
-        init_scripts_dir = os.path.join(BASE_DIR, folder_name)
-        if os.path.exists(init_scripts_dir):
-            for file_name in os.listdir(init_scripts_dir):
-                if file_name.endswith('.js'):
-                    src_file = os.path.join(init_scripts_dir, file_name)
-                    dst_file = os.path.join(SCRIPTS_DIR, file_name)
-                    # 如果目标目录(data/scripts)不存在该文件，则复制过去（防止覆盖用户之后在面板中做的修改）
-                    if not os.path.exists(dst_file):
-                        try:
-                            shutil.copy2(src_file, dst_file)
-                            # flush=True 保证能立刻在 docker logs 中看到输出
-                            print(f"[System] ✅ 初始化脚本已自动复制: {file_name}", flush=True)
-                        except Exception as e:
-                            print(f"[System] ❌ 复制脚本 {file_name} 失败: {str(e)}", flush=True)
-                    else:
-                        print(f"[System] ⚡ 脚本已存在，跳过复制: {file_name}", flush=True)
-    # =========================================================================
+        for folder_name in ['init_scripts', 'init-scripts']:
+            init_scripts_dir = os.path.join(BASE_DIR, folder_name)
+            if os.path.exists(init_scripts_dir):
+                for file_name in os.listdir(init_scripts_dir):
+                    if file_name.endswith('.js'):
+                        src_file = os.path.join(init_scripts_dir, file_name)
+                        dst_file = os.path.join(SCRIPTS_DIR, file_name)
+                        if not os.path.exists(dst_file):
+                            try:
+                                shutil.copy2(src_file, dst_file)
+                                print(f"[System] ✅ 初始化脚本已自动复制: {file_name}", flush=True)
+                            except Exception as e:
+                                pass
 
-# =====================================================================
-# 新增：原生终端 CLI 快捷命令拦截 (支持 unblock, untfa, resetpwd)
-# =====================================================================
+        if not scheduler.running:
+            try:
+                tc_cfg = SystemConfig.query.filter_by(key='task_concurrency').first()
+                if tc_cfg and str(tc_cfg.value).isdigit():
+                    from apscheduler.executors.pool import ThreadPoolExecutor
+                    scheduler.configure(executors={'default': ThreadPoolExecutor(int(tc_cfg.value))})
+            except:
+                pass
+
+            try:
+                tz_cfg = SystemConfig.query.filter_by(key='timezone').first()
+                if tz_cfg and tz_cfg.value:
+                    os.environ['TZ'] = tz_cfg.value
+                    try:
+                        time.tzset()
+                    except AttributeError:
+                        pass
+            except:
+                pass
+
+            scheduler.start()
+
+            if not scheduler.get_job('sys_log_clean'):
+                tz_str = os.environ.get('TZ', 'Asia/Shanghai')
+                scheduler.add_job(auto_clean_logs, CronTrigger.from_crontab('0 2 * * *', timezone=tz_str), id='sys_log_clean')
+
+            try:
+                for task in Task.query.all(): 
+                    add_job_to_scheduler(task)
+            except:
+                pass
+
+            print("\n================ 调度器启动成功 ================")
+            print(f"当前环境变量 TZ: {os.environ.get('TZ', '未设置')}")
+            print("当前已加载的任务及其下一次执行时间:")
+            for job in scheduler.get_jobs():
+                print(f" - 任务ID: {job.id}, 下次运行时间: {getattr(job, 'next_run_time', '无法计算')}")
+            print("================================================\n", flush=True)
+
+            while True:
+                time.sleep(60)
+
+if not os.environ.get('SCHEDULER_STARTED'):
+    os.environ['SCHEDULER_STARTED'] = '1'
+    threading.Thread(target=run_scheduler_forever, daemon=True).start()
+
 if len(sys.argv) > 1:
     cmd = sys.argv[1]
     if cmd in ['unblock', 'untfa', 'resetpwd']:
@@ -1289,8 +1405,6 @@ if len(sys.argv) > 1:
                     sec.locked_until = None
                     db.session.commit()
                     print("✅ 成功：登录错误次数已重置，账号已解除锁定！\n")
-                else:
-                    print("✅ 提示：当前没有被锁定的记录。\n")
 
             elif cmd == 'untfa':
                 totp_cfg = SystemConfig.query.filter_by(key='totp_secret').first()
@@ -1298,18 +1412,15 @@ if len(sys.argv) > 1:
                     db.session.delete(totp_cfg)
                     db.session.commit()
                     print("✅ 成功：两步验证(2FA)已被强制禁用！\n")
-                else:
-                    print("✅ 提示：当前并未开启两步验证。\n")
 
             elif cmd == 'resetpwd':
                 user = User.query.first()
                 if not user:
-                    print("❌ 错误：系统中尚未创建任何用户，请先访问网页进行初始化配置！\n")
+                    print("❌ 错误：系统中尚未创建任何用户！\n")
                 else:
                     print(f"[*] 当前系统用户名为: {user.username}")
-                    # 交互式输入，直接回车代表不修改
                     new_user = input("👉 请输入新用户名 (直接回车则不修改): ").strip()
-                    new_pwd = getpass.getpass("👉 请输入新密码 (直接回车则不修改，输入时不显示): ").strip()
+                    new_pwd = getpass.getpass("👉 请输入新密码 (直接回车则不修改): ").strip()
 
                     changed = False
                     if new_user:
@@ -1321,38 +1432,5 @@ if len(sys.argv) > 1:
 
                     if changed:
                         db.session.commit()
-                        print("\n✅ 成功：账号/密码已重置！请使用新凭证重新登录页面。\n")
-                    else:
-                        print("\n[*] 提示：您没有输入新内容，未做任何修改。\n")
+                        print("\n✅ 成功：账号/密码已重置！\n")
         sys.exit(0)
-# =====================================================================
-
-if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not os.environ.get('FLASK_DEBUG'):
-    with app.app_context():
-        try:
-            for task in Task.query.all(): add_job_to_scheduler(task)
-        except:
-            pass
-
-    if not scheduler.running:
-        if not scheduler.get_job('sys_log_clean'):
-            scheduler.add_job(auto_clean_logs, CronTrigger.from_crontab('0 2 * * *'), id='sys_log_clean')
-
-        try:
-            tc_cfg = SystemConfig.query.filter_by(key='task_concurrency').first()
-            if tc_cfg and str(tc_cfg.value).isdigit():
-                from apscheduler.executors.pool import ThreadPoolExecutor
-
-                scheduler.configure(executors={'default': ThreadPoolExecutor(int(tc_cfg.value))})
-        except:
-            pass
-
-        try:
-            tz_cfg = SystemConfig.query.filter_by(key='timezone').first()
-            if tz_cfg and tz_cfg.value:
-                os.environ['TZ'] = tz_cfg.value
-                time.tzset()
-        except:
-            pass
-
-        scheduler.start()

@@ -2,24 +2,68 @@
 
 {% block styles %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tasks.css') }}">
+<style>
+/* 分页条暗黑模式适配 */
+html.dark-theme .page-link { background-color: #1E293B; border-color: #334155; color: #94A3B8; }
+html.dark-theme .page-link:hover { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .page-item.active .page-link { background-color: #3B82F6; border-color: #3B82F6; color: #fff; }
+html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; color: #475569; }
+
+/* 页面顶部状态选项卡样式 */
+.task-filter-tabs { display: inline-flex; background: #F1F5F9; border-radius: 8px; padding: 4px; }
+.task-filter-btn {
+    border: none; background: transparent; padding: 6px 16px; border-radius: 6px;
+    font-size: 13px; font-weight: 500; color: #64748B; transition: all 0.2s;
+    text-decoration: none; display: flex; align-items: center; justify-content: center;
+}
+.task-filter-btn:hover { color: #334155; }
+.task-filter-btn.active { background: #FFFFFF; color: #2563EB; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+/* 暗黑模式选项卡适配 */
+html.dark-theme .task-filter-tabs { background: #0F172A; }
+html.dark-theme .task-filter-btn { color: #94A3B8; }
+html.dark-theme .task-filter-btn:hover { color: #F8FAFC; }
+html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+</style>
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h5 class="fw-bold mb-0">定时任务</h5>
-    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addTaskModal"><i class="bi bi-plus-lg me-1"></i>新建任务</button>
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <!-- 左侧：分离出来的任务归类选项卡 -->
+    <div class="task-filter-tabs">
+        <a href="/?status=all&per_page={{ per_page }}" class="task-filter-btn {% if status_filter == 'all' %}active{% endif %}">全部任务</a>
+        <a href="/?status=normal&per_page={{ per_page }}" class="task-filter-btn {% if status_filter == 'normal' %}active{% endif %}">正常任务</a>
+        <a href="/?status=disabled&per_page={{ per_page }}" class="task-filter-btn {% if status_filter == 'disabled' %}active{% endif %}">已禁用</a>
+    </div>
+
+    <!-- 右侧：按钮组 -->
+    <div>
+        <button class="btn btn-outline-primary btn-sm me-2" data-bs-toggle="dropdown">批量操作 <i class="bi bi-caret-down-fill"></i></button>
+        <ul class="dropdown-menu">
+            <li><a class="dropdown-item" href="javascript:void(0);" onclick="batchAction('run')"><i class="bi bi-play-fill text-success"></i> 运行选中</a></li>
+            <li><a class="dropdown-item" href="javascript:void(0);" onclick="batchAction('enable')"><i class="bi bi-check-circle text-primary"></i> 启用选中</a></li>
+            <li><a class="dropdown-item" href="javascript:void(0);" onclick="batchAction('disable')"><i class="bi bi-slash-circle text-warning"></i> 禁用选中</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item text-danger" href="javascript:void(0);" onclick="batchAction('delete')"><i class="bi bi-trash"></i> 删除选中</a></li>
+        </ul>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addTaskModal"><i class="bi bi-plus-lg me-1"></i>新建任务</button>
+    </div>
 </div>
 
-<div class="card border-0">
+<div class="card border-0 mb-3">
     <div class="card-body p-0">
         <div class="table-responsive" style="overflow: visible;">
-            <table class="table table-hover align-middle">
+            <table class="table table-hover align-middle mb-0">
                 <thead>
                     <tr>
+                        <th style="padding-left: 20px; width: 40px;">
+                            <input type="checkbox" class="form-check-input" onclick="toggleAllTasks(this)">
+                        </th>
                         <th class="text-center">序号</th>
                         <th class="text-center">任务名称</th>
                         <th class="text-center">执行指令</th>
                         <th class="text-center">Cron规则</th>
+                        <th class="text-center">下次运行时间</th>
                         <th class="text-center">状态</th>
                         <th class="text-center">最后运行时长</th>
                         <th class="text-center">最后执行</th>
@@ -27,12 +71,16 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for task in tasks %}
+                    {% for task in pagination.items %}
                     <tr id="row-{{ task.id }}">
-                        <td class="text-center text-muted fw-bold">{{ loop.index }}</td>
+                        <td style="padding-left: 20px;">
+                            <input type="checkbox" class="form-check-input task-checkbox" value="{{ task.id }}">
+                        </td>
+                        <td class="text-center text-muted fw-bold">{{ (pagination.page - 1) * pagination.per_page + loop.index }}</td>
                         <td class="text-center fw-medium text-dark">{{ task.name }}</td>
                         <td class="text-center"><a href="/scripts?file={{ task.command }}" class="code-badge" title="点击前往编辑脚本">{{ task.command }}</a></td>
                         <td class="text-center font-monospace text-primary" style="font-size: 13px;">{{ task.cron }}</td>
+                        <td class="text-center text-muted font-monospace" style="font-size: 12px;">{{ task.next_run }}</td>
                         <td class="text-center" id="status-col-{{ task.id }}">
                             {% if task.is_disabled == 1 %}
                                 <span class="badge-soft badge-soft-warning">已禁用</span>
@@ -55,9 +103,7 @@
                                         <button class="action-link" onclick='runTask({{ task.id }}, {{ task.name | tojson }})'>运行</button>
                                     {% endif %}
                                 </span>
-
                                 <button class="action-link" onclick='openLogModal({{ task.id }}, {{ task.name | tojson }})'>日志</button>
-
                                 <div class="dropdown">
                                     <button class="action-more" data-bs-toggle="dropdown" data-bs-boundary="window">···</button>
                                     <ul class="dropdown-menu dropdown-menu-end dropdown-menu-action border-0">
@@ -73,11 +119,46 @@
                         </td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="8" class="text-center py-4 text-muted">暂无任务</td></tr>
+                    <tr><td colspan="10" class="text-center py-4 text-muted">暂无任务</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+    </div>
+    
+    <!-- 卡片底部：分页和单页数量设置并排在右侧 -->
+    <div class="card-footer bg-white border-top py-3 d-flex justify-content-end align-items-center gap-3">
+        {% if pagination.pages > 1 %}
+        <nav>
+            <ul class="pagination pagination-sm m-0">
+                <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('tasks', status=status_filter, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
+                </li>
+                {% for p in pagination.iter_pages(left_edge=1, left_current=2, right_current=2, right_edge=1) %}
+                    {% if p %}
+                        <li class="page-item {% if p == pagination.page %}active{% endif %}">
+                            <a class="page-link" href="{{ url_for('tasks', status=status_filter, per_page=per_page, page=p) }}">{{ p }}</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('tasks', status=status_filter, per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}">下一页</a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+        
+        <form method="GET" action="/" id="filterForm" class="m-0">
+            <input type="hidden" name="status" value="{{ status_filter }}">
+            <select name="per_page" class="form-select form-select-sm" style="width: 100px;" onchange="document.getElementById('filterForm').submit();">
+                <option value="10" {% if per_page == 10 %}selected{% endif %}>10条/页</option>
+                <option value="20" {% if per_page == 20 %}selected{% endif %}>20条/页</option>
+                <option value="50" {% if per_page == 50 %}selected{% endif %}>50条/页</option>
+                <option value="100" {% if per_page == 100 %}selected{% endif %}>100条/页</option>
+            </select>
+        </form>
     </div>
 </div>
 
@@ -115,7 +196,7 @@
     </div>
 </div>
 
-<!-- 【全新重绘】极简白底日志弹窗 Modal -->
+<!-- 极简白底日志弹窗 Modal -->
 <div class="modal fade" id="realtimeLogModal" tabindex="-1">
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content shadow-lg border-0" style="border-radius: 8px;">
@@ -130,7 +211,6 @@
                 <pre id="modal-log-container" class="m-0 p-4" style="height: 500px; overflow-y: auto; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.6; color: #374151; background: transparent; border: none;"></pre>
             </div>
             <div class="modal-footer border-top px-4 py-2 bg-white" style="border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
-                <!-- 纯净蓝色“知道了”按钮 -->
                 <button type="button" class="btn btn-primary px-4" data-bs-dismiss="modal" style="background-color: #1e90ff; border: none; font-size: 14px; border-radius: 4px;">知道了</button>
             </div>
         </div>
@@ -150,21 +230,16 @@
 
     function openLogModal(taskId, taskName) {
         currentListeningTaskId = taskId;
-
-        // 更换为仅显示任务名称，还原图片风格
         document.getElementById('logModalTitle').innerText = taskName;
-
         const logContainer = document.getElementById('modal-log-container');
         logContainer.innerHTML = '正在读取本地日志文件...\n';
         terminalModal.show();
-
         fetch(`/api/task/log/${taskId}`).then(res => res.json()).then(data => {
             logContainer.textContent = cleanTerminalOutput(data.content);
             logContainer.scrollTop = logContainer.scrollHeight;
         }).catch(()=> logContainer.textContent = "请求超时");
     }
 
-    // 运行任务时自动开启弹窗并显示初始提示
     function runTask(taskId, taskName) {
         openLogModal(taskId, taskName);
         document.getElementById('modal-log-container').innerHTML = `## 开始执行... 准备下发指令\n\n`;
@@ -183,6 +258,28 @@
         editModal.show();
     }
 
+    function toggleAllTasks(source) {
+        const checkboxes = document.querySelectorAll('.task-checkbox');
+        checkboxes.forEach(cb => cb.checked = source.checked);
+    }
+
+    function batchAction(action) {
+        const checkboxes = document.querySelectorAll('.task-checkbox:checked');
+        const ids = Array.from(checkboxes).map(cb => parseInt(cb.value));
+        if(ids.length === 0) return window.alert('请先勾选需要操作的任务');
+        
+        let msg = action === 'delete' ? '确定要删除选中的任务吗？此操作不可逆！' : '确定要执行此批量操作吗？';
+        window.sysConfirm(msg, () => {
+            fetch('/api/task/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: action, ids: ids })
+            }).then(r => r.json()).then(d => {
+                if(d.status === 'success') location.reload();
+            });
+        });
+    }
+
     socket.on('log_stream', function(msg) {
         if (currentListeningTaskId == msg.task_id) {
             const logContainer = document.getElementById('modal-log-container');
@@ -198,11 +295,8 @@
         const runBtnWrap = document.getElementById(`run-btn-wrap-${taskId}`);
         const durationCol = document.getElementById(`duration-col-${taskId}`);
         const lastRunCol = document.getElementById(`lastrun-col-${taskId}`);
-
         if (!statusCol || !runBtnWrap) return;
-
-        const safeName = document.getElementById(`row-${taskId}`).cells[1].innerText.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-
+        const safeName = document.getElementById(`row-${taskId}`).cells[2].innerText.replace(/'/g, "\\'").replace(/"/g, '&quot;');
         if(statusCol.innerHTML.indexOf('已禁用') === -1) {
             if (status === 'Running') {
                 statusCol.innerHTML = `<span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>`;
@@ -212,10 +306,7 @@
             } else {
                 statusCol.innerHTML = status === 'Idle' ? `<span class="badge-soft badge-soft-secondary">空闲</span>` : `<span class="badge-soft badge-soft-danger">出错</span>`;
                 runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId}, '${safeName}')">运行</button>`;
-
-                if (durationCol && msg.duration) {
-                    durationCol.innerText = msg.duration;
-                }
+                if (durationCol && msg.duration) durationCol.innerText = msg.duration;
             }
         }
     });

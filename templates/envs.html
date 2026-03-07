@@ -2,6 +2,12 @@
 
 {% block styles %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/envs.css') }}">
+<style>
+html.dark-theme .page-link { background-color: #1E293B; border-color: #334155; color: #94A3B8; }
+html.dark-theme .page-link:hover { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .page-item.active .page-link { background-color: #3B82F6; border-color: #3B82F6; color: #fff; }
+html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; color: #475569; }
+</style>
 {% endblock %}
 
 {% block content %}
@@ -10,41 +16,30 @@
     <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addEnvModal"><i class="bi bi-plus-lg me-1"></i>新建变量</button>
 </div>
 
-<div class="card border-0">
+<div class="card border-0 mb-3">
     <div class="card-body p-0">
         <div class="table-responsive" style="overflow: visible;">
             <table class="table ant-table align-middle" id="envTable">
                 <thead>
                     <tr>
-                        <!-- 固定宽度的列 -->
                         <th style="width: 50px;"><input type="checkbox" class="form-check-input"></th>
                         <th style="width: 70px;">序号</th>
-                        <!-- 弹性的列 -->
                         <th style="width: 20%;">名称</th>
-                        <!-- 不设宽度，自动霸占所有剩余的超大空间 -->
                         <th style="width: auto;">值</th>
                         <th style="width: 15%;">备注</th>
-                        <!-- 固定宽度的列，防止时间字符串被挤换行 -->
                         <th style="width: 160px;">更新时间</th>
                         <th style="width: 90px;">状态</th>
                         <th style="width: 130px;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="envTbody">
-                    {% for env in envs %}
+                    {% for env in pagination.items %}
                     <tr class="draggable-row {% if env.is_disabled == 1 %}row-disabled{% endif %}" data-id="{{ env.id }}" draggable="true">
                         <td><input type="checkbox" class="form-check-input"></td>
-                        <td class="text-muted row-index fw-bold" style="cursor: grab;">{{ loop.index }}</td>
-
-                        <!-- 加入 env-name-cell 防止名字过长撑爆 -->
+                        <td class="text-muted row-index fw-bold" style="cursor: grab;">{{ (pagination.page - 1) * pagination.per_page + loop.index }}</td>
                         <td class="font-monospace fw-medium text-dark env-name-cell" title="{{ env.name }}">{{ env.name }}</td>
-
-                        <!-- 值列彻底释放，跟随表头自适应 -->
                         <td class="font-monospace env-value-cell" title="{{ env.value }}">{{ env.value }}</td>
-
-                        <!-- 加入 env-remark-cell 防止备注过长撑爆 -->
                         <td class="text-muted env-remark-cell" title="{{ env.remarks }}">{{ env.remarks }}</td>
-
                         <td class="text-muted" style="font-size: 13px;">{{ env.updated_at if env.updated_at else '-' }}</td>
                         <td>
                             {% if env.is_disabled == 1 %}
@@ -67,6 +62,40 @@
                 </tbody>
             </table>
         </div>
+    </div>
+    
+    <!-- 同样将数量选择框放置在分页组件的同一排右侧 -->
+    <div class="card-footer bg-white border-top py-3 d-flex justify-content-end align-items-center gap-3">
+        {% if pagination.pages > 1 %}
+        <nav>
+            <ul class="pagination pagination-sm m-0">
+                <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('envs', per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
+                </li>
+                {% for p in pagination.iter_pages(left_edge=1, left_current=2, right_current=2, right_edge=1) %}
+                    {% if p %}
+                        <li class="page-item {% if p == pagination.page %}active{% endif %}">
+                            <a class="page-link" href="{{ url_for('envs', per_page=per_page, page=p) }}">{{ p }}</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('envs', per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}">下一页</a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+
+        <form method="GET" action="/envs" id="filterForm" class="m-0">
+            <select name="per_page" class="form-select form-select-sm" style="width: 100px;" onchange="document.getElementById('filterForm').submit();">
+                <option value="10" {% if per_page == 10 %}selected{% endif %}>10条/页</option>
+                <option value="20" {% if per_page == 20 %}selected{% endif %}>20条/页</option>
+                <option value="50" {% if per_page == 50 %}selected{% endif %}>50条/页</option>
+                <option value="100" {% if per_page == 100 %}selected{% endif %}>100条/页</option>
+            </select>
+        </form>
     </div>
 </div>
 
@@ -114,7 +143,6 @@
         envEditModal.show();
     }
 
-    // === 核心原生拖拽排序逻辑 ===
     const tbody = document.getElementById('envTbody');
     let draggedRow = null;
 
@@ -122,7 +150,6 @@
         if (e.target.tagName === 'TR') {
             draggedRow = e.target;
             e.dataTransfer.effectAllowed = 'move';
-            // 设置一点延时，防止拖拽预览图一起变透明
             setTimeout(() => draggedRow.classList.add('dragging'), 0);
         }
     });
@@ -133,7 +160,6 @@
         if (targetRow && targetRow !== draggedRow) {
             const bounding = targetRow.getBoundingClientRect();
             const offset = e.clientY - bounding.top;
-            // 鼠标过了行高一半就往下挤，否则往上挤
             if (offset > bounding.height / 2) {
                 targetRow.after(draggedRow);
             } else {
@@ -153,13 +179,11 @@
     function updateRowIndicesAndSave() {
         const rows = tbody.querySelectorAll('tr.draggable-row');
         const order = [];
-        // 动态修改纯前端的序号列
+        const baseIndex = parseInt("{{ (pagination.page - 1) * pagination.per_page }}") || 0;
         rows.forEach((row, index) => {
-            row.querySelector('.row-index').innerText = index + 1;
+            row.querySelector('.row-index').innerText = baseIndex + index + 1;
             order.push(row.getAttribute('data-id'));
         });
-
-        // 发送排序数组给后端永久保存
         fetch('/api/env/reorder', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
