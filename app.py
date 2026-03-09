@@ -1,3 +1,4 @@
+# app.py
 import os
 import sys
 import getpass
@@ -106,6 +107,7 @@ db.init_app(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 scheduler = BackgroundScheduler()
 running_processes = {}
+debug_processes = {}
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -167,8 +169,8 @@ def global_security_check():
 
     allowed_direct_endpoints = [
         'login', 'install', 'logout', 'tasks', 'static',
-        'scripts_editor', 'scripts_debug', 'api_debug_run', 'logs', 'deps', 'envs', 'config_editor', 'settings',
-        'api_delete_logs', 'api_task_batch'
+        'scripts_editor', 'scripts_debug', 'api_debug_run', 'api_debug_stop', 'logs', 'deps', 'envs', 'config_editor', 'settings',
+        'api_delete_logs', 'api_task_batch', 'api_scripts_save'
     ]
     if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
         referer = request.headers.get("Referer")
@@ -756,8 +758,10 @@ def api_get_task_log(id):
 def deps():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
-    pagination = Dependency.query.order_by(Dependency.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
-    return render_template('deps.html', pagination=pagination, per_page=per_page)
+    pkg_type = request.args.get('type', 'npm')
+    
+    pagination = Dependency.query.filter_by(pkg_type=pkg_type).order_by(Dependency.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    return render_template('deps.html', pagination=pagination, per_page=per_page, current_type=pkg_type)
 
 
 def execute_dependency_cmd(dep_id, action):
@@ -796,8 +800,16 @@ def execute_dependency_cmd(dep_id, action):
                     cmd += f"sed -i 's/archive.ubuntu.com/{host}/g' /etc/apt/sources.list && apt-get update && "
                 cmd += f"apt-get {'remove' if action == 'uninstall' else 'install'} -y {dep.name}"
 
-            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🚀 执行: {cmd}\n", 'clear': True})
+            start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            start_msg = f"==============================================\n" \
+                        f"🚀 开始{'安装' if action=='install' else '卸载'}依赖 | 时间: {start_time_str}\n" \
+                        f"👉 执行指令: {cmd}\n" \
+                        f"==============================================\n\n"
+
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': start_msg, 'clear': True})
             with open(log_file_path, 'w', encoding='utf-8') as f:
+                f.write(start_msg)
+                
                 process = subprocess.Popen(cmd, shell=True, env=get_combined_env(), stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, cwd=run_cwd, text=True, bufsize=1,
                                            encoding='utf-8', errors='replace')
@@ -807,6 +819,16 @@ def execute_dependency_cmd(dep_id, action):
                     os.fsync(f.fileno())    
                     socketio.emit('log_stream', {'task_id': stream_id, 'data': line})
                 process.wait()
+                
+                end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                end_msg = f"\n==============================================\n" \
+                          f"✅ 依赖{'安装' if action=='install' else '卸载'}结束 | 时间: {end_time_str}\n" \
+                          f"🛑 退出码: {process.returncode}\n" \
+                          f"==============================================\n"
+                
+                f.write(end_msg)
+                socketio.emit('log_stream', {'task_id': stream_id, 'data': end_msg})
+
             current_dep = Dependency.query.get(dep_id)
             if current_dep:
                 if action == 'install':
@@ -814,14 +836,9 @@ def execute_dependency_cmd(dep_id, action):
                     db.session.commit()
                     socketio.emit('dep_status', {'id': current_dep.id, 'status': current_dep.status})
                 elif action == 'uninstall':
-                    if process.returncode == 0:
-                        db.session.delete(current_dep);
-                        db.session.commit();
-                        socketio.emit('dep_status', {'id': current_dep.id, 'status': 'Deleted'})
-                    else:
-                        current_dep.status = 'Error';
-                        db.session.commit();
-                        socketio.emit('dep_status', {'id': current_dep.id, 'status': 'Error'})
+                    db.session.delete(current_dep)
+                    db.session.commit()
+                    socketio.emit('dep_status', {'id': current_dep.id, 'status': 'Deleted'})
         except Exception as e:
             pass
         finally:
@@ -834,7 +851,7 @@ def api_install_deps():
     pkg_type = request.form.get('type')
     package = request.form.get('package', '').strip()
 
-    if not package or not re.match(r'^[A-Za-z0-9_\-\.\@\/]+$', package):
+    if not package or not re.match(r'^[A-Za-z0-9_\-\.\@\/=]+$', package):
         return jsonify({"status": "error", "msg": "依赖包名称包含非法字符，出于安全考虑拒绝执行"})
 
     dep = Dependency.query.filter_by(name=package, pkg_type=pkg_type).first()
@@ -853,6 +870,12 @@ def api_install_deps():
 def api_uninstall_deps(id):
     dep = Dependency.query.get(id)
     if not dep: return jsonify({"status": "error"})
+    if dep.status == 'Error':
+        db.session.delete(dep)
+        db.session.commit()
+        socketio.emit('dep_status', {'id': id, 'status': 'Deleted'})
+        return jsonify({"status": "success"})
+        
     dep.status = 'Uninstalling'
     db.session.commit()
     threading.Thread(target=execute_dependency_cmd, args=(dep.id, 'uninstall')).start()
@@ -988,20 +1011,29 @@ def scripts_editor():
     return render_template('scripts.html', files=files, current_file=current_file, content=content)
 
 
-@app.route('/scripts/debug', methods=['GET', 'POST'])
+@app.route('/api/scripts/save', methods=['POST'])
+@login_required
+def api_scripts_save():
+    raw_filename = request.form.get('filename')
+    content = request.form.get('content', '').replace('\r\n', '\n')
+    if not raw_filename: return jsonify({"status": "error", "msg": "文件名为空"})
+    
+    filename_to_save = secure_filename(raw_filename)
+    try:
+        with open(os.path.join(SCRIPTS_DIR, filename_to_save), 'w', encoding='utf-8') as f:
+            f.write(content)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)})
+
+
+@app.route('/scripts/debug', methods=['GET'])
 @login_required
 def scripts_debug():
     files = [f for f in os.listdir(SCRIPTS_DIR) if os.path.isfile(os.path.join(SCRIPTS_DIR, f))]
 
     raw_current_file = request.args.get('file', files[0] if files else 'new_script.py')
     current_file = secure_filename(raw_current_file)
-
-    if request.method == 'POST':
-        content = request.form.get('content', '').replace('\r\n', '\n')
-        with open(os.path.join(SCRIPTS_DIR, current_file), 'w', encoding='utf-8') as f:
-            f.write(content)
-        flash('脚本保存成功，可进行调试')
-        return redirect(url_for('scripts_debug', file=current_file))
 
     content = ""
     if os.path.exists(os.path.join(SCRIPTS_DIR, current_file)):
@@ -1024,12 +1056,16 @@ def execute_debug(filename, stream_id):
             process = subprocess.Popen(cmd_list, shell=False, env=run_env, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
                                        encoding='utf-8', errors='replace')
+            debug_processes[stream_id] = process
+            
             for line in process.stdout:
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': line})
             process.wait()
+            debug_processes.pop(stream_id, None)
             socketio.emit('log_stream',
                           {'task_id': stream_id, 'data': f"\n✅ 调试执行结束，退出码: {process.returncode}\n"})
         except Exception as e:
+            debug_processes.pop(stream_id, None)
             socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n❌ 调试出错: {str(e)}\n"})
 
 
@@ -1044,6 +1080,23 @@ def api_debug_run():
     stream_id = f"debug_{int(time.time())}"
     threading.Thread(target=execute_debug, args=(filename, stream_id), daemon=True).start()
     return jsonify({"status": "success", "stream_id": stream_id})
+
+
+@app.route('/api/scripts/debug_stop', methods=['POST'])
+@login_required
+def api_debug_stop():
+    stream_id = request.form.get('stream_id')
+    if not stream_id: return jsonify({"status": "error"})
+    
+    if stream_id in debug_processes:
+        try:
+            debug_processes[stream_id].kill()
+        except:
+            pass
+        finally:
+            debug_processes.pop(stream_id, None)
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n🛑 手动停止\n"})
+    return jsonify({"status": "success"})
 
 
 @app.route('/api/scripts/check', methods=['POST'])

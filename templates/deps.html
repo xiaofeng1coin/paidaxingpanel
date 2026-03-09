@@ -1,3 +1,4 @@
+<!-- deps.html -->
 {% extends 'base.html' %}
 
 {% block styles %}
@@ -16,20 +17,21 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 </div>
 
 <ul class="nav dep-tabs mb-3" id="depsTabs">
-    <li class="nav-item"><button type="button" class="nav-link active" data-type="npm"><i class="bi bi-box me-2"></i>Node.js</button></li>
-    <li class="nav-item"><button type="button" class="nav-link" data-type="pip"><i class="bi bi-filetype-py me-2"></i>Python</button></li>
-    <li class="nav-item"><button type="button" class="nav-link" data-type="apt"><i class="bi bi-ubuntu me-2"></i>Linux</button></li>
+    <li class="nav-item"><a class="nav-link {% if current_type == 'npm' %}active{% endif %}" href="/deps?type=npm&per_page={{ per_page }}"><i class="bi bi-box me-2"></i>Node.js</a></li>
+    <li class="nav-item"><a class="nav-link {% if current_type == 'pip' %}active{% endif %}" href="/deps?type=pip&per_page={{ per_page }}"><i class="bi bi-filetype-py me-2"></i>Python</a></li>
+    <li class="nav-item"><a class="nav-link {% if current_type == 'apt' %}active{% endif %}" href="/deps?type=apt&per_page={{ per_page }}"><i class="bi bi-ubuntu me-2"></i>Linux</a></li>
 </ul>
 
 <div class="card border-0 mb-3">
     <div class="card-body p-3 d-flex align-items-center gap-2 flex-wrap">
         <form id="installForm" class="d-flex flex-grow-1 gap-2 m-0 align-items-center">
-            <input type="hidden" name="type" id="installType" value="npm">
+            <input type="hidden" name="type" id="installType" value="{{ current_type }}">
             <span class="text-muted small fw-medium text-nowrap"><i class="bi bi-cloud-download me-1"></i>快捷安装:</span>
             <input type="text" name="package" id="pkgInput" class="form-control form-control-sm font-monospace flex-grow-1" placeholder="例如: axios (Node.js)" required>
             <button type="submit" class="btn btn-primary btn-sm" id="installBtn" style="width: 80px;"><span id="btnText">安装</span></button>
         </form>
         <form method="GET" action="/deps" class="d-flex align-items-center m-0 gap-2 ms-auto" id="filterForm">
+            <input type="hidden" name="type" value="{{ current_type }}">
             <select name="per_page" class="form-select form-select-sm" style="width: 110px;" onchange="document.getElementById('filterForm').submit();">
                 <option value="10" {% if per_page == 10 %}selected{% endif %}>10 条/页</option>
                 <option value="20" {% if per_page == 20 %}selected{% endif %}>20 条/页</option>
@@ -54,7 +56,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                 </thead>
                 <tbody id="depsTbody">
                     {% for dep in pagination.items %}
-                    <tr id="dep-row-{{ dep.id }}" class="dep-row row-{{ dep.pkg_type }}" style="display: none;">
+                    <tr id="dep-row-{{ dep.id }}" class="dep-row row-{{ dep.pkg_type }}">
                         <td class="text-center text-muted fw-medium">{{ (pagination.page - 1) * pagination.per_page + loop.index }}</td>
                         <td class="text-center font-monospace text-dark fw-bold">{{ dep.name }}</td>
                         <td class="text-center" id="status-col-{{ dep.id }}">
@@ -71,12 +73,13 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                         <td class="text-center" id="action-col-{{ dep.id }}">
                             <div class="btn-group justify-content-center">
                                 <button class="btn btn-sm btn-light border text-dark" onclick='openLogModal({{ dep.id }}, {{ dep.name | tojson }}, "view")'>日志</button>
-                                <button class="btn btn-sm btn-outline-danger" onclick='uninstallDep({{ dep.id }}, {{ dep.name | tojson }})'>卸载</button>
+                                <button class="btn btn-sm btn-outline-danger" onclick='uninstallDep({{ dep.id }}, {{ dep.name | tojson }})'>卸载/删除</button>
                             </div>
                         </td>
                     </tr>
+                    {% else %}
+                    <tr id="empty-row"><td colspan="4" class="text-center py-5 text-muted">当前分类暂无依赖记录</td></tr>
                     {% endfor %}
-                    <tr id="empty-row" style="display: none;"><td colspan="4" class="text-center py-5 text-muted">当前分类暂无依赖记录</td></tr>
                 </tbody>
             </table>
         </div>
@@ -86,19 +89,19 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         <nav>
             <ul class="pagination pagination-sm m-0">
                 <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
-                    <a class="page-link" href="{{ url_for('deps', per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
+                    <a class="page-link" href="{{ url_for('deps', type=current_type, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
                 </li>
                 {% for p in pagination.iter_pages(left_edge=1, left_current=2, right_current=2, right_edge=1) %}
                     {% if p %}
                         <li class="page-item {% if p == pagination.page %}active{% endif %}">
-                            <a class="page-link" href="{{ url_for('deps', per_page=per_page, page=p) }}">{{ p }}</a>
+                            <a class="page-link" href="{{ url_for('deps', type=current_type, per_page=per_page, page=p) }}">{{ p }}</a>
                         </li>
                     {% else %}
                         <li class="page-item disabled"><span class="page-link">...</span></li>
                     {% endif %}
                 {% endfor %}
                 <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
-                    <a class="page-link" href="{{ url_for('deps', per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}">下一页</a>
+                    <a class="page-link" href="{{ url_for('deps', type=current_type, per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}">下一页</a>
                 </li>
             </ul>
         </nav>
@@ -125,42 +128,15 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 {% block scripts %}
 <script>
     const socket = io(); let currentListeningDepId = null; let terminalModal = null; let isWorking = false;
-    document.addEventListener("DOMContentLoaded", () => { terminalModal = new bootstrap.Modal(document.getElementById('depsLogModal')); filterDeps(); });
+    document.addEventListener("DOMContentLoaded", () => { terminalModal = new bootstrap.Modal(document.getElementById('depsLogModal')); updatePlaceholder(); });
 
     function cleanTerminalOutput(t) { return t ? t.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '') : ""; }
 
-    function filterDeps() {
+    function updatePlaceholder() {
         const type = document.getElementById('installType').value;
-        const rows = document.querySelectorAll('.dep-row');
-        let hasVisible = false;
-        rows.forEach(row => {
-            if (row.classList.contains('row-' + type)) {
-                row.style.display = '';
-                hasVisible = true;
-            } else {
-                row.style.display = 'none';
-            }
-        });
-        const emptyRow = document.getElementById('empty-row');
-        if (emptyRow) {
-            emptyRow.style.display = hasVisible ? 'none' : '';
-        }
+        const placeholders = { npm: '例如: axios (Node.js包)', pip: '例如: requests (Python包)', apt: '例如: wget (Linux软件)' };
+        document.getElementById('pkgInput').placeholder = placeholders[type] || '输入包名...';
     }
-
-    document.querySelectorAll('#depsTabs .nav-link').forEach(tab => {
-        tab.addEventListener('click', function() {
-            document.querySelectorAll('#depsTabs .nav-link').forEach(t => t.classList.remove('active'));
-            this.classList.add('active');
-            const type = this.getAttribute('data-type');
-            document.getElementById('installType').value = type;
-            const placeholders = { npm: '例如: axios (Node.js包)', pip: '例如: requests (Python包)', apt: '例如: wget (Linux软件)' };
-            document.getElementById('pkgInput').placeholder = placeholders[type];
-            filterDeps();
-        });
-    });
-
-    const defaultTab = document.querySelector('#depsTabs .nav-link[data-type="npm"]');
-    if(defaultTab) defaultTab.click();
 
     function openLogModal(depId, pkgName, action="view") {
         currentListeningDepId = depId;
@@ -185,9 +161,17 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
     });
 
     function uninstallDep(id, pkg) {
-        window.sysConfirm(`确定要强行卸载 [ ${pkg} ] 吗？`, () => {
+        window.sysConfirm(`确定要卸载/删除 [ ${pkg} ] 吗？`, () => {
             isWorking = true;
-            fetch(`/api/deps/uninstall/${id}`, { method: 'POST' }).then(r => r.json()).then(d => { if(d.status === 'success') openLogModal(id, pkg, 'uninstall'); });
+            fetch(`/api/deps/uninstall/${id}`, { method: 'POST' }).then(r => r.json()).then(d => { 
+                if(d.status === 'success') {
+                    if (d.msg === 'Deleted') {
+                        location.reload();
+                    } else {
+                        openLogModal(id, pkg, 'uninstall'); 
+                    }
+                }
+            });
         });
     }
 
@@ -197,7 +181,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         if (msg.task_id === `dep_${currentListeningDepId}`) {
             const c = document.getElementById('modal-log-container'); if (msg.clear) c.textContent = '';
             c.textContent += cleanTerminalOutput(msg.data); c.scrollTop = c.scrollHeight;
-            if (msg.data.includes('执行完毕') || msg.data.includes('错误')) isWorking = true;
+            if (msg.data.includes('结束') || msg.data.includes('错误')) isWorking = true;
         }
     });
 
@@ -206,7 +190,15 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         if(!r && msg.status !== 'Deleted') { setTimeout(() => { if(!document.getElementById('depsLogModal').classList.contains('show')) location.reload(); }, 1500); return; }
         if(msg.status === 'Deleted' && r) {
             r.remove();
-            filterDeps();
+            const rows = document.querySelectorAll('.dep-row');
+            if (rows.length === 0) {
+                const tbody = document.getElementById('depsTbody');
+                tbody.innerHTML = '<tr id="empty-row"><td colspan="4" class="text-center py-5 text-muted">当前分类暂无依赖记录</td></tr>';
+            } else {
+                rows.forEach((row, index) => {
+                    row.querySelector('td:first-child').innerText = index + 1;
+                });
+            }
         } else if (r) {
             const sc = document.getElementById(`status-col-${msg.id}`);
             if(msg.status === 'Installed') sc.innerHTML = '<span class="badge-soft-status" style="background:#ECFDF5;color:#059669;">已安装</span>';
