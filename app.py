@@ -1367,11 +1367,13 @@ def api_update_do():
                         
                     files_to_copy.append((os.path.join(dirpath, filename), os.path.join(BASE_DIR, rel_path)))
 
+            # 【核心修改点 1】：强制让 app.py 放在最后一个覆盖，防止因覆盖提前引发的容器猝死
+            files_to_copy.sort(key=lambda x: 1 if os.path.basename(x[1]) == 'app.py' else 0)
+
             total_files = len(files_to_copy)
             
-            # 【核心修改点】：只发消息，发完强行等2秒，确保前端完全收到消息后，再执行覆盖
             socketio.emit('log_stream', {'task_id': stream_id, 'data': f"📦 准备就绪，即将开始覆盖 {total_files} 个文件...\n"})
-            socketio.emit('log_stream', {'task_id': stream_id, 'data': "⚠️ 注意：覆盖过程将触发系统自动重启，请不要关闭当前页面，稍候...\n"})
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': "⚠️ 注意：覆盖完成后将触发系统自动重启，请不要关闭当前页面，稍候...\n"})
             
             time.sleep(2)
 
