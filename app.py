@@ -58,6 +58,7 @@ PYTHON_DIR = os.path.join(DEPS_ENV_DIR, 'python')
 LINUX_DIR = os.path.join(DEPS_ENV_DIR, 'linux')
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.sh')
+VERSION_FILE = os.path.join(BASE_DIR, 'version.json')
 
 os.makedirs(SCRIPTS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
@@ -87,6 +88,10 @@ else:
         content = content.replace('export TASK_TIMEOUT="3600"', 'export TASK_TIMEOUT="1"')
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             f.write(content)
+
+if not os.path.exists(VERSION_FILE):
+    with open(VERSION_FILE, 'w', encoding='utf-8') as f:
+        json.dump({"version": "1.0.0", "changelog": "初始化版本"}, f, ensure_ascii=False, indent=4)
 
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
@@ -170,7 +175,7 @@ def global_security_check():
     allowed_direct_endpoints = [
         'login', 'install', 'logout', 'tasks', 'static',
         'scripts_editor', 'scripts_debug', 'api_debug_run', 'api_debug_stop', 'logs', 'deps', 'envs', 'config_editor', 'settings',
-        'api_delete_logs', 'api_task_batch', 'api_scripts_save'
+        'api_delete_logs', 'api_task_batch', 'api_scripts_save', 'api_update_check', 'api_update_do'
     ]
     if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
         referer = request.headers.get("Referer")
@@ -1168,8 +1173,6 @@ def logs():
     content = "请在左侧选择需要查看的日志..."
 
     if raw_current_folder and raw_current_file:
-        # 移除原先过度严格的 secure_filename 保护，由于包含了文件夹名字
-        # 这里仅替换掉越权字符保证相对路径的安全性
         current_folder = raw_current_folder.replace('..', '').replace('/', '').replace('\\', '')
         current_file = raw_current_file.replace('..', '').replace('/', '').replace('\\', '')
 
@@ -1270,6 +1273,100 @@ def backup_data():
     memory_file.seek(0)
     return send_file(memory_file, download_name=f'pdx_backup_{datetime.now().strftime("%Y%m%d%H%M%S")}.zip',
                      as_attachment=True)
+
+
+@app.route('/api/update/check', methods=['GET'])
+@login_required
+def api_update_check():
+    try:
+        repo = os.environ.get('GITHUB_REPO')
+        branch = os.environ.get('GITHUB_BRANCH', 'main')
+        if not repo:
+            return jsonify({"status": "error", "msg": "未配置 GITHUB_REPO 环境变量，无法检查更新"})
+
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE, 'r', encoding='utf-8') as f:
+                local_data = json.load(f)
+                local_version = local_data.get('version', '1.0.0')
+        else:
+            local_version = '1.0.0'
+
+        url = f"https://raw.githubusercontent.com/{repo}/{branch}/version.json"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as res:
+            remote_data = json.loads(res.read().decode('utf-8'))
+            remote_version = remote_data.get('version')
+            changelog = remote_data.get('changelog', '无更新内容')
+
+        if remote_version and remote_version != local_version:
+            return jsonify({
+                "status": "update_available",
+                "local_version": local_version,
+                "remote_version": remote_version,
+                "changelog": changelog
+            })
+        else:
+            return jsonify({"status": "no_update"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"检查更新失败: {str(e)}"})
+
+
+@app.route('/api/update/do', methods=['POST'])
+@login_required
+def api_update_do():
+    repo = os.environ.get('GITHUB_REPO')
+    branch = os.environ.get('GITHUB_BRANCH', 'main')
+    if not repo:
+        return jsonify({"status": "error", "msg": "未配置 GITHUB_REPO 环境变量，无法执行更新"})
+
+    def _do_update():
+        try:
+            url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=30) as res:
+                zip_data = res.read()
+            
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                root_folder = zf.namelist()[0]
+                for file_info in zf.infolist():
+                    if file_info.is_dir(): continue
+                    rel_path = os.path.relpath(file_info.filename, root_folder)
+                    
+                    rel_path_unix = rel_path.replace('\\', '/')
+                    filename = rel_path_unix.split('/')[-1]
+
+                    exclude_dirs = (
+                        'data/', '__pycache__/', 'build/', 'develop-eggs/', 'dist/', 'downloads/', 
+                        'eggs/', '.eggs/', 'lib/', 'lib64/', 'parts/', 'sdist/', 'var/', 'wheels/', 
+                        'venv/', 'env/', 'ENV/', '.vscode/', '.idea/', '.git/', '.github/', 'logs/', 'docs/'
+                    )
+                    if any(rel_path_unix.startswith(d) for d in exclude_dirs):
+                        continue
+                        
+                    exclude_files = {
+                        'Dockerfile', '.dockerignore', 'docker-compose.yml', 'README.md', 
+                        '.gitignore', '.DS_Store', 'Thumbs.db', 'credentials.json', '.env', '.Python', '.installed.cfg'
+                    }
+                    if filename in exclude_files:
+                        continue
+                        
+                    exclude_exts = ('.pyc', '.pyo', '.class', '.so', '.swp', '.swo', '.pem', '.key', '.log', '.egg')
+                    if filename.endswith(exclude_exts) or '.egg-info/' in rel_path_unix:
+                        continue
+                    
+                    target_path = os.path.join(BASE_DIR, rel_path)
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    
+                    with zf.open(file_info.filename) as source, open(target_path, "wb") as target:
+                        shutil.copyfileobj(source, target)
+            
+            time.sleep(2)
+            os._exit(0)  
+        except Exception as e:
+            pass
+
+    threading.Thread(target=_do_update, daemon=True).start()
+    return jsonify({"status": "success", "msg": "正在更新并重启服务，请稍后刷新页面！"})
 
 
 @app.route('/api/avatar')
