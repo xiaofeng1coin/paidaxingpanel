@@ -1296,8 +1296,8 @@ def api_update_check():
         else:
             local_version = '1.0.0'
 
-        url = f"https://raw.githubusercontent.com/{repo}/{branch}/version.json"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        url = f"https://raw.githubusercontent.com/{repo}/{branch}/version.json?t={int(time.time())}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0', 'Cache-Control': 'no-cache'})
         with urllib.request.urlopen(req, timeout=10) as res:
             remote_data = json.loads(res.read().decode('utf-8'))
             remote_version = remote_data.get('version')
@@ -1326,60 +1326,67 @@ def api_update_do():
 
     def _do_update():
         stream_id = "sys_update"
-        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🚀 正在从 GitHub ({repo}:{branch}) 获取最新版本源码...\n", 'clear': True})
+        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🚀 正在连接 GitHub 获取最新版本源码...\n", 'clear': True})
         try:
             url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=60) as res:
                 zip_data = res.read()
             
-            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"✅ 源码包下载完成 (大小: {len(zip_data)//1024} KB)，准备解压覆盖...\n"})
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"✅ 源码下载完成 ({(len(zip_data)//1024):,} KB)，正在预解压...\n"})
             
+            temp_dir = tempfile.mkdtemp()
             with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-                root_folder = zf.namelist()[0]
-                total_files = len(zf.infolist())
-                processed = 0
-                for file_info in zf.infolist():
-                    processed += 1
-                    if processed % 50 == 0:
-                        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"⏳ 正在解压并替换文件: {processed}/{total_files}...\n"})
-                        
-                    if file_info.is_dir(): continue
-                    rel_path = os.path.relpath(file_info.filename, root_folder)
-                    
-                    rel_path_unix = rel_path.replace('\\', '/')
-                    filename = rel_path_unix.split('/')[-1]
+                zf.extractall(temp_dir)
+                
+            root_folder = os.path.join(temp_dir, os.listdir(temp_dir)[0])
+            
+            exclude_dirs = (
+                'data/', '__pycache__/', 'build/', 'develop-eggs/', 'dist/', 'downloads/', 
+                'eggs/', '.eggs/', 'lib/', 'lib64/', 'parts/', 'sdist/', 'var/', 'wheels/', 
+                'venv/', 'env/', 'ENV/', '.vscode/', '.idea/', '.git/', '.github/', 'logs/', 'docs/'
+            )
+            exclude_files = {
+                'Dockerfile', '.dockerignore', 'docker-compose.yml', 'README.md', 
+                '.gitignore', '.DS_Store', 'Thumbs.db', 'credentials.json', '.env', '.Python', '.installed.cfg'
+            }
+            exclude_exts = ('.pyc', '.pyo', '.class', '.so', '.swp', '.swo', '.pem', '.key', '.log', '.egg')
 
-                    exclude_dirs = (
-                        'data/', '__pycache__/', 'build/', 'develop-eggs/', 'dist/', 'downloads/', 
-                        'eggs/', '.eggs/', 'lib/', 'lib64/', 'parts/', 'sdist/', 'var/', 'wheels/', 
-                        'venv/', 'env/', 'ENV/', '.vscode/', '.idea/', '.git/', '.github/', 'logs/', 'docs/'
-                    )
+            files_to_copy = []
+            for dirpath, dirnames, filenames in os.walk(root_folder):
+                for filename in filenames:
+                    rel_path = os.path.relpath(os.path.join(dirpath, filename), root_folder)
+                    rel_path_unix = rel_path.replace('\\', '/')
+                    
                     if any(rel_path_unix.startswith(d) for d in exclude_dirs):
                         continue
-                        
-                    exclude_files = {
-                        'Dockerfile', '.dockerignore', 'docker-compose.yml', 'README.md', 
-                        '.gitignore', '.DS_Store', 'Thumbs.db', 'credentials.json', '.env', '.Python', '.installed.cfg'
-                    }
                     if filename in exclude_files:
                         continue
-                        
-                    exclude_exts = ('.pyc', '.pyo', '.class', '.so', '.swp', '.swo', '.pem', '.key', '.log', '.egg')
                     if filename.endswith(exclude_exts) or '.egg-info/' in rel_path_unix:
                         continue
-                    
-                    target_path = os.path.join(BASE_DIR, rel_path)
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    
-                    with zf.open(file_info.filename) as source, open(target_path, "wb") as target:
-                        shutil.copyfileobj(source, target)
+                        
+                    files_to_copy.append((os.path.join(dirpath, filename), os.path.join(BASE_DIR, rel_path)))
+
+            total_files = len(files_to_copy)
             
-            socketio.emit('log_stream', {'task_id': stream_id, 'data': "✅ 所有文件覆盖完毕！\n"})
-            socketio.emit('log_stream', {'task_id': stream_id, 'data': "🔄 正在请求系统重启，请不要关闭本页面...\n"})
-            socketio.emit('update_finished', {})
+            # 【核心修改点】：只发消息，发完强行等2秒，确保前端完全收到消息后，再执行覆盖
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"📦 准备就绪，即将开始覆盖 {total_files} 个文件...\n"})
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': "⚠️ 注意：覆盖过程将触发系统自动重启，请不要关闭当前页面，稍候...\n"})
+            
             time.sleep(2)
-            os._exit(0)  
+
+            for src, dst in files_to_copy:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+            
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except:
+                pass
+            
+            time.sleep(1)
+            os._exit(0)
+            
         except Exception as e:
             socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n❌ 更新失败: {str(e)}\n"})
 

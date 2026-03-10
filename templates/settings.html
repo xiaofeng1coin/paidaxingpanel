@@ -8,6 +8,9 @@ html.dark-theme .page-link { background-color: #1E293B; border-color: #334155; c
 html.dark-theme .page-link:hover { background-color: #0F172A; color: #F8FAFC; }
 html.dark-theme .page-item.active .page-link { background-color: #3B82F6; border-color: #3B82F6; color: #fff; }
 html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; color: #475569; }
+
+/* 专门为了新进度框在暗黑模式下的颜色覆盖 */
+html.dark-theme #update_log_container { background-color: #0F172A !important; border-color: #334155 !important; }
 </style>
 {% endblock %}
 
@@ -112,7 +115,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         </div></div>
     </div>
 
-    <!-- 登录日志 (已修改为支持分页和批量删除筛选) -->
+    <!-- 登录日志 -->
     <div class="tab-pane fade" id="tab-logs">
         <div class="card border-0 mb-3">
             <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center py-3 flex-wrap gap-2">
@@ -123,7 +126,6 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                 </div>
                 <form method="GET" action="/settings" class="d-flex align-items-center m-0 gap-2" id="logFilterForm">
                     <input type="hidden" name="tab" value="logs">
-                    <!-- 【修复处】将宽度从 90px 修改为 110px 解决文字被下拉箭头遮挡问题 -->
                     <select name="per_page" class="form-select form-select-sm" style="width: 110px;" onchange="document.getElementById('logFilterForm').submit();">
                         <option value="10" {% if per_page == 10 %}selected{% endif %}>10 条/页</option>
                         <option value="20" {% if per_page == 20 %}selected{% endif %}>20 条/页</option>
@@ -421,9 +423,18 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                     </div>
                 </div>
 
-                <!-- 更新日志实时显示区域 (默认隐藏) -->
-                <div id="update-log-area" style="display: none; height: 200px;">
-                    <pre id="update_log_container" class="bg-dark text-white p-3 rounded h-100 mb-0 font-monospace" style="overflow-y: auto; font-size: 12px; white-space: pre-wrap;"></pre>
+                <!-- 更新日志现代进度条显示区域 (默认隐藏) -->
+                <div id="update-log-area" style="display: none; padding-top: 10px;">
+                    <div class="d-flex align-items-center mb-2">
+                        <div class="spinner-border spinner-border-sm text-primary me-2" id="update-spinner"></div>
+                        <span class="fw-bold text-primary" id="update-status-text">正在初始化更新...</span>
+                    </div>
+                    <div class="progress mb-3" style="height: 6px; border-radius: 4px;">
+                        <div id="update-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 10%; transition: width 0.4s ease;"></div>
+                    </div>
+                    <div class="bg-light border rounded p-2" style="height: 120px; overflow-y: auto; position: relative;" id="update_log_container">
+                        <pre class="mb-0 text-muted font-monospace" style="font-size: 12px; white-space: pre-wrap; margin:0; line-height: 1.6;"></pre>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer justify-content-end">
@@ -440,6 +451,9 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 <!-- 引入您刚刚下载到本地的二维码生成库 -->
 <script src="{{ url_for('static', filename='vendor/qrcode/qrcode.min.js') }}"></script>
 <script>
+    // 全局更新标识状态
+    let isUpdating = false;
+
     const urlParams = new URLSearchParams(window.location.search);
     const tabName = urlParams.get('tab');
     if (tabName) {
@@ -606,6 +620,8 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
     }
 
     function doUpdate() {
+        isUpdating = true; // 开启更新状态标识
+        
         const btn = document.getElementById('doUpdateBtn');
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>执行中...';
         btn.disabled = true;
@@ -614,18 +630,26 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         document.getElementById('update-info-area').style.display = 'none';
         document.getElementById('update-log-area').style.display = 'block';
         
-        const logContainer = document.getElementById('update_log_container');
-        logContainer.textContent = '>> 正在初始化更新程序...\n';
+        const pre = document.querySelector('#update_log_container pre');
+        pre.textContent = '';
+        
+        document.getElementById('update-progress-bar').style.width = '10%';
+        document.getElementById('update-status-text').innerText = '正在初始化更新...';
         
         fetch('/api/update/do', { method: 'POST' }).then(res => res.json()).then(data => {
             if(data.status !== 'success') {
-                logContainer.textContent += ">> 错误: " + data.msg + "\n";
+                isUpdating = false;
+                pre.textContent += ">> 错误: " + data.msg + "\n";
                 btn.innerHTML = '立即更新';
                 btn.disabled = false;
                 document.getElementById('cancelUpdateBtn').style.display = 'inline-block';
+                document.getElementById('update-spinner').className = 'bi bi-x-circle text-danger me-2';
+                document.getElementById('update-status-text').innerText = '更新请求失败';
+                document.getElementById('update-status-text').className = 'fw-bold text-danger';
+                document.getElementById('update-progress-bar').classList.replace('bg-primary', 'bg-danger');
             }
         }).catch(() => {
-            logContainer.textContent += ">> 网络请求异常，请查看面板日志。\n";
+            pre.textContent += ">> 网络请求发送异常，请查看系统日志。\n";
         });
     }
 
@@ -633,24 +657,80 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
     socket.on('log_stream', function(msg) {
         if (msg.task_id === 'sys_update') {
             const container = document.getElementById('update_log_container');
-            if (msg.clear) container.textContent = '';
-            container.textContent += msg.data;
+            const pre = container.querySelector('pre');
+            if (msg.clear) pre.textContent = '';
+            pre.textContent += msg.data;
             container.scrollTop = container.scrollHeight;
+
+            const dataStr = msg.data;
+            const pBar = document.getElementById('update-progress-bar');
+            const pText = document.getElementById('update-status-text');
+
+            if (dataStr.includes("获取最新版本")) {
+                pBar.style.width = '20%';
+                pText.innerText = '正在下载新版源码...';
+            } else if (dataStr.includes("源码下载完成")) {
+                pBar.style.width = '50%';
+                pText.innerText = '下载完成，正在预解压...';
+            } else if (dataStr.includes("即将开始覆盖")) {
+                pBar.style.width = '80%';
+                pText.innerText = '正在准备覆盖文件...';
+            } else if (dataStr.includes("更新失败")) {
+                isUpdating = false;
+                pBar.style.width = '100%';
+                pBar.classList.replace('bg-primary', 'bg-danger');
+                document.getElementById('update-spinner').className = 'bi bi-x-circle text-danger me-2';
+                pText.className = 'fw-bold text-danger';
+                pText.innerText = '更新过程出现错误';
+                document.getElementById('cancelUpdateBtn').style.display = 'inline-block';
+                document.getElementById('cancelUpdateBtn').innerText = '关闭';
+            }
         }
     });
 
-    // 接收更新完成指令并进行倒计时重启
-    socket.on('update_finished', function() {
-        let count = 5;
-        const btn = document.getElementById('doUpdateBtn');
-        const timer = setInterval(() => {
-            btn.innerHTML = `重启中 (${count}s)`;
-            count--;
-            if (count < 0) {
-                clearInterval(timer);
-                location.reload();
-            }
-        }, 1000);
+    // 【核心机制】：通过监听断连事件判断服务是否正在热重启
+    socket.on('disconnect', function() {
+        if (isUpdating) {
+            const pBar = document.getElementById('update-progress-bar');
+            const pText = document.getElementById('update-status-text');
+            const pre = document.querySelector('#update_log_container pre');
+            const container = document.getElementById('update_log_container');
+            
+            pre.textContent += "\n>> ⚠️ 监测到与后端断开连接，说明新文件已覆盖，触发了系统重启...\n";
+            container.scrollTop = container.scrollHeight;
+            
+            pBar.style.width = '100%';
+            pBar.classList.replace('bg-primary', 'bg-warning');
+            pText.className = 'fw-bold text-warning';
+            pText.innerText = '服务正在重启中...';
+            document.getElementById('update-spinner').className = 'spinner-border spinner-border-sm text-warning me-2';
+
+            let checkCount = 0;
+            // 每隔3秒静默向服务器发送探测请求
+            const timer = setInterval(() => {
+                checkCount++;
+                pre.textContent += `>> 正在尝试探测服务器连通性 (第 ${checkCount} 次)...\n`;
+                container.scrollTop = container.scrollHeight;
+                
+                // 探测当前页面是否已恢复
+                fetch(window.location.href, { cache: 'no-store' }).then(res => {
+                    if (res.status === 200 || res.ok) {
+                        clearInterval(timer);
+                        pre.textContent += ">> ✅ 连接成功！新版本服务已就绪。\n";
+                        container.scrollTop = container.scrollHeight;
+                        
+                        pBar.classList.replace('bg-warning', 'bg-success');
+                        pText.className = 'fw-bold text-success';
+                        pText.innerText = '更新完成！页面即将自动刷新...';
+                        document.getElementById('update-spinner').className = 'bi bi-check-circle text-success me-2';
+                        
+                        setTimeout(() => location.reload(), 1500);
+                    }
+                }).catch(() => {
+                    // 请求报错说明还在重启中，继续等待
+                });
+            }, 3000);
+        }
     });
 </script>
 {% endblock %}
