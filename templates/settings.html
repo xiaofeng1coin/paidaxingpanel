@@ -342,8 +342,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                 <h3 class="fw-bold mb-3" style="color: #0F172A;">派大星面板</h3>
                 <p class="text-muted mb-4">支持 Python3、JavaScript、Shell 的现代化定时任务管理面板</p>
                 <div class="text-start d-inline-block text-muted" style="font-size: 14px; line-height: 2;">
-                    <div>版本：正式版 v1.0.0</div>
-                    <div>更新时间：2023-11-01 12:00</div>
+                    <div>版本：正式版 v{{ sys_version }}</div>
                     <div class="mt-3">
                         <a href="javascript:void(0)" class="text-decoration-none me-3">Github</a>
                         <a href="javascript:void(0)" class="text-decoration-none me-3">Telegram频道</a>
@@ -401,26 +400,34 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 </div>
 
 <!-- 更新提示 Modal -->
-<div class="modal fade" id="updateModal" tabindex="-1">
+<div class="modal fade" id="updateModal" tabindex="-1" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header border-bottom">
-                <h6 class="modal-title fw-bold text-success"><i class="bi bi-rocket-takeoff me-2"></i>发现新版本</h6>
+                <h6 class="modal-title fw-bold text-success"><i class="bi bi-rocket-takeoff me-2"></i>系统更新</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body p-4">
-                <div class="d-flex align-items-center mb-3">
-                    <span class="badge bg-secondary me-2">当前版本：<span id="u_local"></span></span>
-                    <i class="bi bi-arrow-right text-muted me-2"></i>
-                    <span class="badge bg-success">最新版本：<span id="u_remote"></span></span>
+            <div class="modal-body p-4" style="min-height: 250px;">
+                <!-- 更新信息显示区域 -->
+                <div id="update-info-area">
+                    <div class="d-flex align-items-center mb-3">
+                        <span class="badge bg-secondary me-2">当前版本：<span id="u_local"></span></span>
+                        <i class="bi bi-arrow-right text-muted me-2"></i>
+                        <span class="badge bg-success">最新版本：<span id="u_remote"></span></span>
+                    </div>
+                    <h6 class="fw-bold">更新内容：</h6>
+                    <div class="bg-light p-3 rounded" style="max-height: 150px; overflow-y: auto;">
+                        <pre id="u_changelog" class="mb-0 font-monospace text-muted" style="white-space: pre-wrap; font-size: 13px;"></pre>
+                    </div>
                 </div>
-                <h6 class="fw-bold">更新内容：</h6>
-                <div class="bg-light p-3 rounded" style="max-height: 200px; overflow-y: auto;">
-                    <pre id="u_changelog" class="mb-0 font-monospace text-muted" style="white-space: pre-wrap; font-size: 13px;"></pre>
+
+                <!-- 更新日志实时显示区域 (默认隐藏) -->
+                <div id="update-log-area" style="display: none; height: 200px;">
+                    <pre id="update_log_container" class="bg-dark text-white p-3 rounded h-100 mb-0 font-monospace" style="overflow-y: auto; font-size: 12px; white-space: pre-wrap;"></pre>
                 </div>
             </div>
             <div class="modal-footer justify-content-end">
-                <button type="button" class="btn btn-light border" data-bs-dismiss="modal">暂不更新</button>
+                <button type="button" class="btn btn-light border" id="cancelUpdateBtn" data-bs-dismiss="modal">暂不更新</button>
                 <button type="button" class="btn btn-success px-4" id="doUpdateBtn" onclick="doUpdate()">立即更新</button>
             </div>
         </div>
@@ -575,9 +582,18 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
     function checkUpdate() {
         fetch('/api/update/check').then(res => res.json()).then(data => {
             if(data.status === 'update_available') {
+                document.getElementById('update-info-area').style.display = 'block';
+                document.getElementById('update-log-area').style.display = 'none';
+                
                 document.getElementById('u_local').innerText = data.local_version;
                 document.getElementById('u_remote').innerText = data.remote_version;
                 document.getElementById('u_changelog').innerText = data.changelog;
+                
+                const btn = document.getElementById('doUpdateBtn');
+                btn.innerHTML = '立即更新';
+                btn.disabled = false;
+                document.getElementById('cancelUpdateBtn').style.display = 'inline-block';
+                
                 updateModal.show();
             } else if (data.status === 'no_update') {
                 window.alert("当前已是最新版本，暂无更新！");
@@ -591,22 +607,50 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 
     function doUpdate() {
         const btn = document.getElementById('doUpdateBtn');
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>更新中...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>执行中...';
         btn.disabled = true;
         
+        document.getElementById('cancelUpdateBtn').style.display = 'none';
+        document.getElementById('update-info-area').style.display = 'none';
+        document.getElementById('update-log-area').style.display = 'block';
+        
+        const logContainer = document.getElementById('update_log_container');
+        logContainer.textContent = '>> 正在初始化更新程序...\n';
+        
         fetch('/api/update/do', { method: 'POST' }).then(res => res.json()).then(data => {
-            if(data.status === 'success') {
-                window.alert(data.msg);
-                setTimeout(() => location.reload(), 3000);
-            } else {
-                window.alert("更新出错: " + data.msg);
+            if(data.status !== 'success') {
+                logContainer.textContent += ">> 错误: " + data.msg + "\n";
                 btn.innerHTML = '立即更新';
                 btn.disabled = false;
+                document.getElementById('cancelUpdateBtn').style.display = 'inline-block';
             }
         }).catch(() => {
-            window.alert("网络请求断开或服务正在重启，请稍后手动刷新页面！");
-            setTimeout(() => location.reload(), 3000);
+            logContainer.textContent += ">> 网络请求异常，请查看面板日志。\n";
         });
     }
+
+    // 接收后端更新进度的实时日志
+    socket.on('log_stream', function(msg) {
+        if (msg.task_id === 'sys_update') {
+            const container = document.getElementById('update_log_container');
+            if (msg.clear) container.textContent = '';
+            container.textContent += msg.data;
+            container.scrollTop = container.scrollHeight;
+        }
+    });
+
+    // 接收更新完成指令并进行倒计时重启
+    socket.on('update_finished', function() {
+        let count = 5;
+        const btn = document.getElementById('doUpdateBtn');
+        const timer = setInterval(() => {
+            btn.innerHTML = `重启中 (${count}s)`;
+            count--;
+            if (count < 0) {
+                clearInterval(timer);
+                location.reload();
+            }
+        }, 1000);
+    });
 </script>
 {% endblock %}

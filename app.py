@@ -152,6 +152,7 @@ def inject_global_settings():
     sys_theme = 'auto'
     sys_lang = 'auto'
     last_login = None
+    sys_version = '1.0.0'
     try:
         if current_user.is_authenticated or request.endpoint == 'login':
             configs = {c.key: c.value for c in SystemConfig.query.all()}
@@ -159,9 +160,13 @@ def inject_global_settings():
             sys_lang = configs.get('language', 'auto')
             if current_user.is_authenticated and 'last_login_info' in session:
                 last_login = session.pop('last_login_info', None)
+        
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE, 'r', encoding='utf-8') as f:
+                sys_version = json.load(f).get('version', '1.0.0')
     except:
         pass
-    return dict(sys_theme=sys_theme, sys_lang=sys_lang, last_login_info=last_login)
+    return dict(sys_theme=sys_theme, sys_lang=sys_lang, last_login_info=last_login, sys_version=sys_version)
 
 
 @app.before_request
@@ -1320,15 +1325,25 @@ def api_update_do():
         return jsonify({"status": "error", "msg": "未配置 GITHUB_REPO 环境变量，无法执行更新"})
 
     def _do_update():
+        stream_id = "sys_update"
+        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🚀 正在从 GitHub ({repo}:{branch}) 获取最新版本源码...\n", 'clear': True})
         try:
             url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=30) as res:
+            with urllib.request.urlopen(req, timeout=60) as res:
                 zip_data = res.read()
+            
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"✅ 源码包下载完成 (大小: {len(zip_data)//1024} KB)，准备解压覆盖...\n"})
             
             with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
                 root_folder = zf.namelist()[0]
+                total_files = len(zf.infolist())
+                processed = 0
                 for file_info in zf.infolist():
+                    processed += 1
+                    if processed % 50 == 0:
+                        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"⏳ 正在解压并替换文件: {processed}/{total_files}...\n"})
+                        
                     if file_info.is_dir(): continue
                     rel_path = os.path.relpath(file_info.filename, root_folder)
                     
@@ -1360,13 +1375,16 @@ def api_update_do():
                     with zf.open(file_info.filename) as source, open(target_path, "wb") as target:
                         shutil.copyfileobj(source, target)
             
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': "✅ 所有文件覆盖完毕！\n"})
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': "🔄 正在请求系统重启，请不要关闭本页面...\n"})
+            socketio.emit('update_finished', {})
             time.sleep(2)
             os._exit(0)  
         except Exception as e:
-            pass
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n❌ 更新失败: {str(e)}\n"})
 
     threading.Thread(target=_do_update, daemon=True).start()
-    return jsonify({"status": "success", "msg": "正在更新并重启服务，请稍后刷新页面！"})
+    return jsonify({"status": "success", "msg": "已开始更新流程"})
 
 
 @app.route('/api/avatar')
