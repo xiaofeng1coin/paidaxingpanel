@@ -1,3 +1,4 @@
+# logs.html
 {% extends 'base.html' %}
 
 {% block styles %}
@@ -37,12 +38,12 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
     <h5 class="fw-bold mb-0">系统日志</h5>
 </div>
 
-<div class="row g-3 h-100" style="min-height: 70vh;">
+<div class="row g-3 h-100" style="min-height: calc(100vh - 120px);">
     <!-- 左侧日志树：固定宽度 220px，紧凑清爽 -->
     <div class="col-md-auto" style="width: 220px;">
         <div class="card border-0 h-100">
             <div class="card-header bg-white border-bottom"><h6 class="mb-0 fw-bold"><i class="bi bi-folder2-open me-2"></i>日志目录</h6></div>
-            <div class="card-body p-2" style="overflow-y: auto; max-height: 65vh;">
+            <div class="card-body p-2" style="overflow-y: auto; height: calc(100vh - 180px);">
                 <ul class="log-tree">
                     {% for folder, files in tree.items() %}
                     <li class="tree-folder">
@@ -54,7 +55,7 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
                         <ul class="tree-files" style="display: {% if current_folder == folder %}block{% else %}none{% endif %};">
                             {% for f in files %}
                             <li class="tree-file">
-                                <a href="/logs?folder={{ folder }}&file={{ f }}" class="{% if current_file == f %}active{% endif %}">
+                                <a href="/logs?folder={{ folder }}&file={{ f }}" class="{% if current_file == f %}active{% endif %}" title="{{ f }}">
                                     <i class="bi bi-file-earmark-text text-muted me-2"></i>{{ f }}
                                 </a>
                             </li>
@@ -74,7 +75,7 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
 
     <!-- 右侧内容展示：移除暗色背景，适配全局主题 -->
     <div class="col d-flex flex-column" style="min-width: 0;">
-        <div class="card border-0 flex-grow-1">
+        <div class="card border-0 flex-grow-1 h-100">
             <div class="card-header bg-light border-bottom">
                 <h6 class="mb-0 fw-medium font-monospace text-secondary" style="font-size: 13px;">
                     <i class="bi bi-terminal-fill me-2 text-primary"></i>
@@ -86,9 +87,9 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
                 </h6>
             </div>
             <!-- 去除了原有的 bg-dark 类 -->
-            <div class="card-body p-0 position-relative bg-transparent" style="border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; overflow:hidden;">
+            <div class="card-body p-0 position-relative bg-transparent h-100" style="border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; overflow:hidden;">
                 <!-- 加入了 log-content-pre 类去控制纯白底色黑字 -->
-                <pre class="m-0 p-3 h-100 font-monospace log-content-pre" style="overflow-y: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.6; min-height: 600px;">{{ content }}</pre>
+                <pre class="m-0 p-3 h-100 font-monospace log-content-pre" style="overflow-y: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.6; height: calc(100vh - 180px); min-height: 0;">{{ content }}</pre>
             </div>
         </div>
     </div>

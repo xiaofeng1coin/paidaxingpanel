@@ -1,3 +1,4 @@
+# deps.html
 <!-- deps.html -->
 {% extends 'base.html' %}
 
@@ -166,7 +167,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
             fetch(`/api/deps/uninstall/${id}`, { method: 'POST' }).then(r => r.json()).then(d => { 
                 if(d.status === 'success') {
                     if (d.msg === 'Deleted') {
-                        location.reload();
+                        window.location.href = '/deps?type=' + document.getElementById('installType').value;
                     } else {
                         openLogModal(id, pkg, 'uninstall'); 
                     }
@@ -175,7 +176,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         });
     }
 
-    function reloadIfFinished() { if(isWorking) location.reload(); }
+    function reloadIfFinished() { if(isWorking) window.location.href = '/deps?type=' + document.getElementById('installType').value; }
 
     socket.on('log_stream', function(msg) {
         if (msg.task_id === `dep_${currentListeningDepId}`) {
@@ -187,7 +188,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 
     socket.on('dep_status', function(msg) {
         const r = document.getElementById(`dep-row-${msg.id}`);
-        if(!r && msg.status !== 'Deleted') { setTimeout(() => { if(!document.getElementById('depsLogModal').classList.contains('show')) location.reload(); }, 1500); return; }
+        if(!r && msg.status !== 'Deleted') { setTimeout(() => { if(!document.getElementById('depsLogModal').classList.contains('show')) window.location.href = '/deps?type=' + document.getElementById('installType').value; }, 1500); return; }
         if(msg.status === 'Deleted' && r) {
             r.remove();
             const rows = document.querySelectorAll('.dep-row');

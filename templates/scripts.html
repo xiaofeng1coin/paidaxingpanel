@@ -1,3 +1,4 @@
+# scripts.html
 {% extends 'base.html' %}
 
 {% block content %}
@@ -14,7 +15,7 @@
             <div class="card-body p-0" style="overflow-y: auto; height: calc(100vh - 180px);">
                 <div class="list-group list-group-flush border-0">
                     {% for f in files %}
-                    <a href="/scripts?file={{ f }}" class="list-group-item list-group-item-action border-0 {% if current_file == f %}active fw-bold rounded-3 m-1 shadow-sm{% endif %}" style="padding: 8px 12px; font-size: 14px;">
+                    <a href="/scripts?file={{ f }}" class="list-group-item list-group-item-action border-0 text-truncate {% if current_file == f %}active fw-bold rounded-3 m-1 shadow-sm{% endif %}" style="padding: 8px 12px; font-size: 14px; display: block;" title="{{ f }}">
                         <i class="bi {% if f.endswith('.js') %}bi-filetype-js text-warning{% elif f.endswith('.py') %}bi-filetype-py text-primary{% elif f.endswith('.sh') %}bi-filetype-sh text-success{% else %}bi-file-earmark-text text-muted{% endif %} me-2"></i>{{ f }}
                     </a>
                     {% endfor %}
