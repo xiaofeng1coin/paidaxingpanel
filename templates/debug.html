@@ -29,7 +29,7 @@
         })();
     </script>
 </head>
-<body>
+<body oncontextmenu="return false;" onkeydown="if(event.keyCode==123 || (event.ctrlKey&&event.shiftKey&&(event.keyCode==73||event.keyCode==74)) || (event.ctrlKey&&event.keyCode==85)){return false;}">
 
     <!-- 顶部控制栏 -->
     <div class="debug-toolbar">

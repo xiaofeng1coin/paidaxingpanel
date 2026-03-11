@@ -52,6 +52,26 @@ class Dependency(db.Model):
     pkg_type = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='Installing')
 
+class Subscription(db.Model):
+    __bind_key__ = 'tasks'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    type = db.Column(db.String(20), default='public_repo')
+    url = db.Column(db.String(255), nullable=False)
+    alias = db.Column(db.String(50), nullable=False) # 唯一值(目录名)
+    branch = db.Column(db.String(50))
+    schedule_type = db.Column(db.String(20), default='crontab')
+    cron = db.Column(db.String(50))
+    whitelist = db.Column(db.String(255))
+    blacklist = db.Column(db.String(255))
+    depend_file = db.Column(db.String(255))
+    extensions = db.Column(db.String(255))
+    auto_add = db.Column(db.Integer, default=1)
+    auto_del = db.Column(db.Integer, default=1)
+    status = db.Column(db.String(20), default='Idle')
+    last_run = db.Column(db.String(50), default='-')
+    is_disabled = db.Column(db.Integer, default=0)
+
 # =======================
 # 3. envs.db (环境变量)
 # =======================
@@ -63,4 +83,4 @@ class Env(db.Model):
     remarks = db.Column(db.String(100))
     is_disabled = db.Column(db.Integer, default=0)
     updated_at = db.Column(db.String(50))
-    position = db.Column(db.Integer, default=0)    # 新增：用于保存拖拽后的顺序
+    position = db.Column(db.Integer, default=0)

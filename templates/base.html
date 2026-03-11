@@ -6,7 +6,6 @@
     <title>派大星面板 - 控制中心</title>
     <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
-    <!-- 全局核心样式已在此处引入，包含暗黑模式适配 -->
     <link href="{{ url_for('static', filename='css/base.css') }}" rel="stylesheet">
 
     <script>
@@ -27,7 +26,7 @@
     </script>
     {% block styles %}{% endblock %}
 </head>
-<body>
+<body oncontextmenu="return false;" onkeydown="if(event.keyCode==123 || (event.ctrlKey&&event.shiftKey&&(event.keyCode==73||event.keyCode==74)) || (event.ctrlKey&&event.keyCode==85)){return false;}">
     <div class="app-layout">
         <div class="d-flex d-md-none align-items-center justify-content-between px-3 py-2 border-bottom bg-white">
             <div class="d-flex align-items-center"><div class="logo-icon me-2" style="width:28px; height:28px; font-size:14px;"><i class="bi bi-star-fill"></i></div><span class="fw-bold">派大星面板</span></div>
@@ -48,6 +47,7 @@
             <div class="sidebar-menu px-2 py-3 flex-grow-1 overflow-x-hidden">
                 <ul class="nav flex-column">
                     <li class="nav-item"><a class="nav-item-link {% if request.path == '/' %}active{% endif %}" href="/" title="定时任务"><i class="bi bi-clock-history"></i><span>定时任务</span></a></li>
+                    <li class="nav-item"><a class="nav-item-link {% if request.path == '/subs' %}active{% endif %}" href="/subs" title="订阅管理"><i class="bi bi-cloud-arrow-down"></i><span>订阅管理</span></a></li>
                     <li class="nav-item"><a class="nav-item-link {% if request.path == '/envs' %}active{% endif %}" href="/envs" title="环境变量"><i class="bi bi-sliders"></i><span>环境变量</span></a></li>
                     <li class="nav-item"><a class="nav-item-link {% if request.path == '/config' %}active{% endif %}" href="/config" title="配置文件"><i class="bi bi-file-earmark-text"></i><span>配置文件</span></a></li>
                     <li class="nav-item"><a class="nav-item-link {% if request.path == '/scripts' %}active{% endif %}" href="/scripts" title="脚本管理"><i class="bi bi-code-square"></i><span>脚本管理</span></a></li>
@@ -89,7 +89,6 @@
                         {% endif %}
                     {% endwith %}
 
-                    <!-- 上次登录信息弹窗 -->
                     {% if last_login_info %}
                         <div class="toast border-0 shadow-lg show toast-login-info" role="alert" aria-live="assertive" aria-atomic="true" id="lastLoginToast">
                             <div class="toast-header border-0 bg-transparent pb-0 mt-1">
@@ -190,7 +189,6 @@
 
             document.querySelectorAll('.toast:not(#lastLoginToast)').forEach(t => new bootstrap.Toast(t, { delay: 3000 }).show());
 
-            // 自动加载登录信息弹窗
             var loginToastEl = document.getElementById('lastLoginToast');
             if(loginToastEl) { new bootstrap.Toast(loginToastEl, {delay: 5000}).show(); }
 
@@ -207,7 +205,8 @@
                     "提示": "Notice", "确认操作": "Confirm Action", "确定": "OK",
                     "取消": "Cancel", "确认": "Confirm", "保存": "Save", "新建任务": "Add Job",
                     "序号": "No.", "任务名称": "Task Name", "执行指令": "Command", "状态": "Status",
-                    "操作": "Actions", "日志": "Log", "停止": "Stop", "运行": "Run"
+                    "操作": "Actions", "日志": "Log", "停止": "Stop", "运行": "Run",
+                    "订阅管理": "Subscriptions"
                 };
                 function translateNode(node) {
                     if (node.nodeType === 3) {

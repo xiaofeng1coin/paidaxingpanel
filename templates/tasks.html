@@ -3,40 +3,36 @@
 {% block styles %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tasks.css') }}">
 <style>
-/* 分页条暗黑模式适配 */
 html.dark-theme .page-link { background-color: #1E293B; border-color: #334155; color: #94A3B8; }
 html.dark-theme .page-link:hover { background-color: #0F172A; color: #F8FAFC; }
 html.dark-theme .page-item.active .page-link { background-color: #3B82F6; border-color: #3B82F6; color: #fff; }
 html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; color: #475569; }
 
-/* 页面顶部状态选项卡样式 */
 .task-filter-tabs { display: inline-flex; background: #F1F5F9; border-radius: 8px; padding: 4px; }
-.task-filter-btn {
-    border: none; background: transparent; padding: 6px 16px; border-radius: 6px;
-    font-size: 13px; font-weight: 500; color: #64748B; transition: all 0.2s;
-    text-decoration: none; display: flex; align-items: center; justify-content: center;
-}
+.task-filter-btn { border: none; background: transparent; padding: 6px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; color: #64748B; transition: all 0.2s; text-decoration: none; display: flex; align-items: center; justify-content: center; }
 .task-filter-btn:hover { color: #334155; }
 .task-filter-btn.active { background: #FFFFFF; color: #2563EB; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 
-/* 暗黑模式选项卡适配 */
 html.dark-theme .task-filter-tabs { background: #0F172A; }
 html.dark-theme .task-filter-btn { color: #94A3B8; }
 html.dark-theme .task-filter-btn:hover { color: #F8FAFC; }
 html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+
+/* 核心修复：启用固定表格布局，强制不换行，超长截断显示省略号，解决撑破边框问题 */
+.table { table-layout: fixed; width: 100%; }
+.table th, .table td { vertical-align: middle; white-space: nowrap; }
+.table-responsive { overflow: visible !important; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-    <!-- 左侧：分离出来的任务归类选项卡 -->
     <div class="task-filter-tabs">
         <a href="/?status=all&per_page={{ per_page }}" class="task-filter-btn {% if status_filter == 'all' %}active{% endif %}">全部任务</a>
         <a href="/?status=normal&per_page={{ per_page }}" class="task-filter-btn {% if status_filter == 'normal' %}active{% endif %}">正常任务</a>
         <a href="/?status=disabled&per_page={{ per_page }}" class="task-filter-btn {% if status_filter == 'disabled' %}active{% endif %}">已禁用</a>
     </div>
 
-    <!-- 右侧：按钮组 -->
     <div>
         <button class="btn btn-outline-primary btn-sm me-2" data-bs-toggle="dropdown">批量操作 <i class="bi bi-caret-down-fill"></i></button>
         <ul class="dropdown-menu">
@@ -52,22 +48,22 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 
 <div class="card border-0 mb-3">
     <div class="card-body p-0">
-        <div class="table-responsive" style="overflow: visible;">
+        <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
                 <thead>
                     <tr>
                         <th style="padding-left: 20px; width: 40px;">
                             <input type="checkbox" class="form-check-input" onclick="toggleAllTasks(this)">
                         </th>
-                        <th class="text-center">序号</th>
-                        <th class="text-center">任务名称</th>
-                        <th class="text-center">执行指令</th>
-                        <th class="text-center">Cron规则</th>
-                        <th class="text-center">下次运行时间</th>
-                        <th class="text-center">状态</th>
-                        <th class="text-center">最后运行时长</th>
-                        <th class="text-center">最后执行</th>
-                        <th class="text-center" style="width: 160px;">操作</th>
+                        <th class="text-center" style="width: 45px;">序号</th>
+                        <th class="text-center" style="width: 16%;">任务名称</th>
+                        <th class="text-center" style="width: 22%;">执行指令</th>
+                        <th class="text-center" style="width: 12%;">Cron规则</th>
+                        <th class="text-center" style="width: 13%;">下次运行时间</th>
+                        <th class="text-center" style="width: 80px;">状态</th>
+                        <th class="text-center" style="width: 90px;">最后时长</th>
+                        <th class="text-center" style="width: 13%;">最后执行</th>
+                        <th class="text-center" style="width: 130px;">操作</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -77,10 +73,11 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                             <input type="checkbox" class="form-check-input task-checkbox" value="{{ task.id }}">
                         </td>
                         <td class="text-center text-muted fw-bold">{{ (pagination.page - 1) * pagination.per_page + loop.index }}</td>
-                        <td class="text-center fw-medium text-dark">{{ task.name }}</td>
-                        <td class="text-center"><a href="/scripts?file={{ task.command }}" class="code-badge" title="点击前往编辑脚本">{{ task.command }}</a></td>
-                        <td class="text-center font-monospace text-primary" style="font-size: 13px;">{{ task.cron }}</td>
-                        <td class="text-center text-muted font-monospace" style="font-size: 12px;">{{ task.next_run }}</td>
+                        <!-- 利用 text-truncate 和固定布局实现自动省略号 -->
+                        <td class="text-center fw-medium text-dark text-truncate" title="{{ task.name }}">{{ task.name }}</td>
+                        <td class="text-center text-truncate" title="{{ task.command }}"><a href="/scripts?file={{ task.command }}" class="code-badge text-truncate d-inline-block" style="max-width: 100%;">{{ task.command }}</a></td>
+                        <td class="text-center font-monospace text-primary text-truncate" style="font-size: 13px;" title="{{ task.cron }}">{{ task.cron }}</td>
+                        <td class="text-center text-muted font-monospace text-truncate" style="font-size: 12px;" title="{{ task.next_run }}">{{ task.next_run }}</td>
                         <td class="text-center" id="status-col-{{ task.id }}">
                             {% if task.is_disabled == 1 %}
                                 <span class="badge-soft badge-soft-warning">已禁用</span>
@@ -92,8 +89,8 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                                 <span class="badge-soft badge-soft-secondary">空闲</span>
                             {% endif %}
                         </td>
-                        <td class="text-center text-muted font-monospace" style="font-size: 12px;" id="duration-col-{{ task.id }}">{{ task.last_duration }}</td>
-                        <td class="text-center text-muted" style="font-size: 12px;" id="lastrun-col-{{ task.id }}">{{ task.last_run }}</td>
+                        <td class="text-center text-muted font-monospace text-truncate" style="font-size: 12px;" id="duration-col-{{ task.id }}">{{ task.last_duration }}</td>
+                        <td class="text-center text-muted text-truncate" style="font-size: 12px;" id="lastrun-col-{{ task.id }}" title="{{ task.last_run }}">{{ task.last_run }}</td>
                         <td class="text-center" id="action-col-{{ task.id }}">
                             <div class="d-inline-flex align-items-center justify-content-center w-100">
                                 <span id="run-btn-wrap-{{ task.id }}">
@@ -103,8 +100,8 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                                         <button class="action-link" onclick='runTask({{ task.id }}, {{ task.name | tojson }})'>运行</button>
                                     {% endif %}
                                 </span>
-                                <button class="action-link" onclick='openLogModal({{ task.id }}, {{ task.name | tojson }})'>日志</button>
-                                <div class="dropdown">
+                                <button class="action-link ms-1" onclick='openLogModal({{ task.id }}, {{ task.name | tojson }})'>日志</button>
+                                <div class="dropdown ms-1">
                                     <button class="action-more" data-bs-toggle="dropdown" data-bs-boundary="window">···</button>
                                     <ul class="dropdown-menu dropdown-menu-end dropdown-menu-action border-0">
                                         <li><a class="dropdown-item" href="javascript:void(0);" onclick='openEditModal({{ task.id }}, {{ task.name | tojson }}, {{ task.command | tojson }}, {{ task.cron | tojson }})'><i class="bi bi-pencil-square"></i> 编辑</a></li>
@@ -126,7 +123,6 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         </div>
     </div>
     
-    <!-- 卡片底部：分页和单页数量设置并排在右侧 -->
     <div class="card-footer bg-white border-top py-3 d-flex justify-content-end align-items-center gap-3">
         {% if pagination.pages > 1 %}
         <nav>
@@ -169,7 +165,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
             <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">配置新任务</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body p-4">
                 <div class="mb-3"><label class="form-label text-muted small fw-medium">任务名称</label><input type="text" name="name" class="form-control" required></div>
-                <div class="mb-3"><label class="form-label text-muted small fw-medium">执行指令/脚本</label><input type="text" name="command" class="form-control font-monospace" placeholder="main.py" required></div>
+                <div class="mb-3"><label class="form-label text-muted small fw-medium">执行指令/脚本</label><input type="text" name="command" class="form-control font-monospace" placeholder="main.py 或 dir/main.py" required></div>
                 <div class="mb-2"><label class="form-label text-muted small fw-medium">Cron 表达式</label><input type="text" name="cron" class="form-control font-monospace" value="0 9 * * *" required></div>
             </div>
             <div class="modal-footer justify-content-end bg-light rounded-bottom">

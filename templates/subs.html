@@ -1,0 +1,362 @@
+{% extends 'base.html' %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subs.css') }}">
+<style>
+html.dark-theme .page-link { background-color: #1E293B; border-color: #334155; color: #94A3B8; }
+html.dark-theme .page-link:hover { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .page-item.active .page-link { background-color: #3B82F6; border-color: #3B82F6; color: #fff; }
+html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; color: #475569; }
+
+/* 核心修复：启用固定表格布局，强制不换行，超长截断显示省略号 */
+.table { table-layout: fixed; width: 100%; }
+.table th, .table td { vertical-align: middle; white-space: nowrap; }
+.table-responsive { overflow: visible !important; }
+.badge-soft-warning { background: #FFFBEB; color: #D97706; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <h5 class="fw-bold mb-0">订阅管理</h5>
+    <button class="btn btn-primary btn-sm" onclick="openAddModal()"><i class="bi bi-plus-lg me-1"></i>创建订阅</button>
+</div>
+
+<div class="card border-0 mb-3">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th class="text-center" style="width: 15%;">名称</th>
+                        <th class="text-center" style="width: 35%;">链接</th>
+                        <th class="text-center" style="width: 10%;">类型</th>
+                        <th class="text-center" style="width: 10%;">分支</th>
+                        <th class="text-center" style="width: 10%;">定时规则</th>
+                        <th class="text-center" style="width: 8%;">状态</th>
+                        <th class="text-center" style="width: 120px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sub in pagination.items %}
+                    <tr>
+                        <td class="text-center fw-medium text-dark text-truncate" title="{{ sub.name }}">{{ sub.name }}</td>
+                        <td class="text-center text-truncate" title="{{ sub.url }}"><a href="{{ sub.url }}" target="_blank" class="code-badge text-truncate d-inline-block" style="max-width: 100%;">{{ sub.url }}</a></td>
+                        <td class="text-center text-muted" style="font-size: 13px;">{% if sub.type == 'public_repo' %}公开仓库{% else %}单文件{% endif %}</td>
+                        <td class="text-center font-monospace text-truncate" style="font-size: 12px;" title="{{ sub.branch }}">{{ sub.branch if sub.branch else '-' }}</td>
+                        <td class="text-center font-monospace text-primary text-truncate" style="font-size: 13px;" title="{{ sub.cron }}">{{ sub.cron }}</td>
+                        <td class="text-center" id="status-col-{{ sub.id }}">
+                            {% if sub.is_disabled == 1 %}
+                                <span class="badge-soft badge-soft-warning">已禁用</span>
+                            {% elif sub.status == 'Running' %}
+                                <span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>
+                            {% elif sub.status == 'Error' %}
+                                <span class="badge-soft badge-soft-danger">出错</span>
+                            {% else %}
+                                <span class="badge-soft badge-soft-secondary">空闲中</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center">
+                            <div class="d-inline-flex align-items-center justify-content-center w-100">
+                                <span id="run-btn-wrap-{{ sub.id }}">
+                                    {% if sub.status != 'Running' and sub.is_disabled != 1 %}
+                                    <button class="action-link" onclick='runSub({{ sub.id }}, {{ sub.name | tojson }})'>运行</button>
+                                    {% endif %}
+                                </span>
+                                <button class="action-link ms-2" onclick='openLogModal({{ sub.id }}, {{ sub.name | tojson }})'>日志</button>
+                                <div class="dropdown ms-2">
+                                    <button class="action-more" data-bs-toggle="dropdown" data-bs-boundary="window">···</button>
+                                    <ul class="dropdown-menu dropdown-menu-end dropdown-menu-action border-0">
+                                        <li><a class="dropdown-item" href="javascript:void(0);" onclick='openEditModal({{ sub.id }}, {{ sub.name | tojson }}, {{ sub.type | tojson }}, {{ sub.url | tojson }}, {{ sub.branch | tojson }}, {{ sub.alias | tojson }}, {{ sub.cron | tojson }}, {{ sub.whitelist | tojson }}, {{ sub.blacklist | tojson }}, {{ sub.depend_file | tojson }}, {{ sub.extensions | tojson }}, {{ sub.auto_add }}, {{ sub.auto_del }})'><i class="bi bi-pencil-square"></i> 编辑</a></li>
+                                        <li><a class="dropdown-item" href="/api/subs/toggle/{{ sub.id }}"><i class="bi bi-slash-circle"></i> {% if sub.is_disabled == 1 %}启用{% else %}禁用{% endif %}</a></li>
+                                        <li><a class="dropdown-item text-warning" href="/api/subs/delete_tasks/{{ sub.id }}" onclick="return confirm('确定要删除该订阅产生的所有任务并删除对应的物理文件/目录吗？')"><i class="bi bi-trash2"></i> 删除任务</a></li>
+                                        <li><hr class="dropdown-divider m-0 my-1"></li>
+                                        <li><a class="dropdown-item text-danger" href="/api/subs/delete/{{ sub.id }}" onclick="return confirm('确定要删除该订阅吗？(已添加的任务不会被自动删除)')"><i class="bi bi-trash"></i> 删除订阅</a></li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7" class="text-center py-4 text-muted">暂无订阅记录</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div class="card-footer bg-white border-top py-3 d-flex justify-content-end align-items-center gap-3">
+        {% if pagination.pages > 1 %}
+        <nav>
+            <ul class="pagination pagination-sm m-0">
+                <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('subs', per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
+                </li>
+                {% for p in pagination.iter_pages() %}
+                    {% if p %}
+                        <li class="page-item {% if p == pagination.page %}active{% endif %}">
+                            <a class="page-link" href="{{ url_for('subs', per_page=per_page, page=p) }}">{{ p }}</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('subs', per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}">下一页</a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 创建/编辑订阅 Modal -->
+<div class="modal fade" id="subModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <form class="modal-content" id="subForm">
+            <input type="hidden" id="subId" name="id" value="">
+            <div class="modal-header border-bottom"><h6 class="modal-title fw-bold" id="subModalTitle">创建订阅</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body p-4">
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-medium"><span class="text-danger">*</span> 名称</label>
+                    <input type="text" name="name" id="inp_name" class="form-control" placeholder="输入订阅名称" required>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-medium"><span class="text-danger">*</span> 类型</label>
+                    <div class="d-flex gap-3">
+                        <div class="form-check"><input class="form-check-input" type="radio" name="type" id="typeRepo" value="public_repo" checked onchange="toggleSubFields()"><label class="form-check-label" for="typeRepo">公开仓库</label></div>
+                        <div class="form-check"><input class="form-check-input" type="radio" name="type" id="typeFile" value="single_file" onchange="toggleSubFields()"><label class="form-check-label" for="typeFile">单文件</label></div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-medium"><span class="text-danger">*</span> 链接</label>
+                    <input type="text" name="url" id="inp_url" class="form-control" placeholder="请输入订阅链接" required>
+                </div>
+
+                <div class="mb-3" id="field-branch">
+                    <label class="form-label text-muted small fw-medium">分支</label>
+                    <input type="text" name="branch" id="inp_branch" class="form-control" placeholder="请输入分支">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-medium"><span class="text-danger">*</span> 唯一值 (自动生成目录名) <i class="bi bi-question-circle" title="脚本保存的目录名称，系统自动生成"></i></label>
+                    <input type="text" name="alias" id="inp_alias" class="form-control bg-light" readonly>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-medium"><span class="text-danger">*</span> 定时类型</label>
+                    <div class="d-flex gap-3">
+                        <div class="form-check"><input class="form-check-input" type="radio" name="schedule_type" value="crontab" checked><label class="form-check-label">crontab</label></div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-medium"><span class="text-danger">*</span> 定时规则</label>
+                    <input type="text" name="cron" id="inp_cron" class="form-control font-monospace" placeholder="秒(可选) 分 时 天 月 周" required>
+                </div>
+
+                <div id="field-advanced" class="border-top pt-3 mt-3">
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-medium">白名单 <i class="bi bi-question-circle" title="支持正则匹配"></i></label>
+                        <input type="text" name="whitelist" id="inp_whitelist" class="form-control font-monospace" placeholder="请输入脚本筛选白名单关键词，竖线分割">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-medium">黑名单 <i class="bi bi-question-circle" title="支持正则匹配"></i></label>
+                        <input type="text" name="blacklist" id="inp_blacklist" class="form-control font-monospace" placeholder="请输入脚本筛选黑名单关键词，竖线分割">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-medium">依赖文件</label>
+                        <input type="text" name="depend_file" id="inp_depend" class="form-control font-monospace" placeholder="请输入脚本依赖文件关键词，竖线分割">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-medium">文件后缀</label>
+                        <input type="text" name="extensions" id="inp_ext" class="form-control font-monospace" placeholder="例如: js|py|sh">
+                    </div>
+                </div>
+
+                <div class="d-flex gap-4 mt-3 pt-3 border-top">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" name="auto_add" id="autoAdd" checked>
+                        <label class="form-check-label small" for="autoAdd">自动添加任务</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" name="auto_del" id="autoDel" checked>
+                        <label class="form-check-label small" for="autoDel">自动删除任务</label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer justify-content-end bg-light rounded-bottom">
+                <button type="button" class="btn btn-light border" data-bs-dismiss="modal">取消</button>
+                <button type="submit" class="btn btn-primary" style="width: 100px;">确定</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 执行日志弹窗 -->
+<div class="modal fade" id="subLogModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content shadow-lg border-0" style="border-radius: 8px;">
+            <div class="modal-header border-bottom px-4 py-3 bg-white" style="border-top-left-radius: 8px; border-top-right-radius: 8px;">
+                <h6 class="modal-title d-flex align-items-center m-0 fw-bold" style="font-size: 15px; color: #111827;">
+                    <i class="bi bi-file-text me-2" style="color: #374151; font-size: 16px;"></i>
+                    <span id="subLogTitle">订阅日志</span>
+                </h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" style="font-size: 12px;"></button>
+            </div>
+            <div class="modal-body p-0 bg-white">
+                <pre id="sub-log-container" class="m-0 p-4" style="height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.6; color: #374151; background: transparent; border: none;"></pre>
+            </div>
+            <div class="modal-footer border-top px-4 py-2 bg-white" style="border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
+                <button type="button" class="btn btn-primary px-4" data-bs-dismiss="modal" style="background-color: #1e90ff; border: none; font-size: 14px; border-radius: 4px;">知道了</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const socket = io();
+    let currentSubId = null;
+    let mainModal = null;
+    let logModal = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+        mainModal = new bootstrap.Modal(document.getElementById('subModal'));
+        logModal = new bootstrap.Modal(document.getElementById('subLogModal'));
+        toggleSubFields();
+    });
+
+    const urlInput = document.getElementById('inp_url');
+    const branchInput = document.getElementById('inp_branch');
+    const aliasInput = document.getElementById('inp_alias');
+
+    function updateAlias() {
+        const url = urlInput.value.trim();
+        const branch = branchInput.value.trim();
+        if (!url) { aliasInput.value = ''; return; }
+        
+        // 提取最后一个 / 后的内容作为仓库名/文件名
+        let repoName = url.split('/').pop();
+        if (repoName.endsWith('.git')) repoName = repoName.slice(0, -4);
+        
+        if (document.getElementById('typeRepo').checked) {
+            aliasInput.value = branch ? `${repoName}_${branch}` : repoName;
+        } else {
+            aliasInput.value = repoName.split('.')[0] || 'single_script';
+        }
+    }
+
+    urlInput.addEventListener('input', updateAlias);
+    branchInput.addEventListener('input', updateAlias);
+
+    function toggleSubFields() {
+        const isRepo = document.getElementById('typeRepo').checked;
+        document.getElementById('field-branch').style.display = isRepo ? 'block' : 'none';
+        document.getElementById('field-advanced').style.display = isRepo ? 'block' : 'none';
+        updateAlias();
+    }
+
+    function openAddModal() {
+        document.getElementById('subForm').reset();
+        document.getElementById('subId').value = '';
+        document.getElementById('subModalTitle').innerText = '创建订阅';
+        document.getElementById('typeRepo').checked = true;
+        toggleSubFields();
+        mainModal.show();
+    }
+
+    function openEditModal(id, name, type, url, branch, alias, cron, white, black, depend, ext, auto_add, auto_del) {
+        document.getElementById('subId').value = id;
+        document.getElementById('subModalTitle').innerText = '编辑订阅';
+        
+        document.getElementById('inp_name').value = name;
+        if(type === 'single_file') { document.getElementById('typeFile').checked = true; }
+        else { document.getElementById('typeRepo').checked = true; }
+        
+        document.getElementById('inp_url').value = url;
+        document.getElementById('inp_branch').value = branch;
+        document.getElementById('inp_alias').value = alias;
+        document.getElementById('inp_cron').value = cron;
+        document.getElementById('inp_whitelist').value = white;
+        document.getElementById('inp_blacklist').value = black;
+        document.getElementById('inp_depend').value = depend;
+        document.getElementById('inp_ext').value = ext;
+        
+        document.getElementById('autoAdd').checked = auto_add === 1;
+        document.getElementById('autoDel').checked = auto_del === 1;
+        
+        toggleSubFields();
+        // 恢复覆盖 alias
+        document.getElementById('inp_alias').value = alias;
+        mainModal.show();
+    }
+
+    document.getElementById('subForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const id = document.getElementById('subId').value;
+        const formData = new FormData(this);
+        const data = Object.fromEntries(formData.entries());
+        data.auto_add = formData.get('auto_add') === 'on' ? 1 : 0;
+        data.auto_del = formData.get('auto_del') === 'on' ? 1 : 0;
+
+        const endpoint = id ? `/api/subs/edit/${id}` : '/api/subs/add';
+        
+        fetch(endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        }).then(r => r.json()).then(d => {
+            if(d.status === 'success') location.reload();
+            else alert(d.msg || "保存失败");
+        });
+    });
+
+    function openLogModal(id, name) {
+        currentSubId = id;
+        document.getElementById('subLogTitle').innerText = `查看订阅: ${name}`;
+        const container = document.getElementById('sub-log-container');
+        container.innerHTML = "正在向后端请求读取日志记录...\n";
+        logModal.show();
+        fetch(`/api/subs/log/${id}`).then(res => res.json()).then(data => {
+            container.textContent = data.content;
+            container.scrollTop = container.scrollHeight;
+        });
+    }
+
+    function runSub(id, name) {
+        currentSubId = id;
+        document.getElementById('subLogTitle').innerText = `正在运行: ${name}`;
+        const container = document.getElementById('sub-log-container');
+        container.innerHTML = "正在下发指令...\n";
+        logModal.show();
+        fetch(`/api/subs/run/${id}`).then(res => res.json());
+    }
+
+    socket.on('log_stream', function(msg) {
+        if (msg.task_id === `sub_${currentSubId}`) {
+            const container = document.getElementById('sub-log-container');
+            if (msg.clear) container.textContent = '';
+            container.textContent += msg.data;
+            container.scrollTop = container.scrollHeight;
+        }
+    });
+
+    socket.on('sub_status', function(msg) {
+        const statusCol = document.getElementById(`status-col-${msg.sub_id}`);
+        const btnWrap = document.getElementById(`run-btn-wrap-${msg.sub_id}`);
+        if(statusCol && btnWrap) {
+            if(msg.status === 'Running') {
+                statusCol.innerHTML = '<span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>';
+                btnWrap.innerHTML = '';
+            } else {
+                statusCol.innerHTML = msg.status === 'Error' ? '<span class="badge-soft badge-soft-danger">出错</span>' : '<span class="badge-soft badge-soft-secondary">空闲中</span>';
+                setTimeout(() => location.reload(), 1500);
+            }
+        }
+    });
+</script>
+{% endblock %}

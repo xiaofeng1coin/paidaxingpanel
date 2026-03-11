@@ -1,0 +1,50 @@
+/* static/css/subs.css */
+.badge-soft { padding: 4px 8px; font-weight: 500; border-radius: 4px; font-size: 12px; }
+.badge-soft-success { background: #ECFDF5; color: #059669; }
+.badge-soft-danger { background: #FEF2F2; color: #DC2626; }
+.badge-soft-secondary { background: #F1F5F9; color: #475569; }
+
+.code-badge { background: #F1F5F9; color: #0F172A; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 12px; border: 1px solid #E2E8F0; text-decoration: none; }
+a.code-badge:hover { background-color: #DBEAFE; color: #1D4ED8; border-color: #BFDBFE; text-decoration: underline; }
+
+.action-link {
+    color: #2563EB;
+    background: transparent;
+    border: none;
+    padding: 0 8px;
+    font-size: 14px;
+    font-weight: 400;
+    cursor: pointer;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+.action-link:hover { color: #1D4ED8; text-decoration: underline; }
+
+.action-more {
+    color: #2563EB;
+    font-weight: bold;
+    background: transparent;
+    border: none;
+    padding: 0 4px;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.dropdown-menu-action {
+    min-width: 110px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    border: 1px solid var(--border-color);
+    padding: 4px 0;
+    margin-top: 5px !important;
+    z-index: 1050;
+}
+.dropdown-menu-action .dropdown-item { font-size: 13px; padding: 8px 16px; display: flex; align-items: center; color: var(--text-main); }
+.dropdown-menu-action .dropdown-item i { font-size: 14px; margin-right: 10px; color: var(--text-muted); }
+.dropdown-menu-action .dropdown-item:hover { background-color: #F8FAFC; color: var(--primary); }
+.dropdown-menu-action .dropdown-item.text-danger:hover { background-color: #FEF2F2; color: #DC2626; }
+
+html.dark-theme #subLogModal .modal-header,
+html.dark-theme #subLogModal .modal-body { background-color: #1E293B !important; border-color: #334155 !important; }
+html.dark-theme #subLogModal .modal-title { color: #F8FAFC !important; }
+html.dark-theme #sub-log-container { color: #E2E8F0 !important; }

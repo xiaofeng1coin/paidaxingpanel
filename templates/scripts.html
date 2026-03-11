@@ -1,5 +1,29 @@
-# scripts.html
 {% extends 'base.html' %}
+
+{% block styles %}
+<style>
+.log-tree { list-style: none; padding: 0; margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+.tree-folder { margin-bottom: 6px; }
+.tree-folder-header { cursor: pointer; display: flex; align-items: center; padding: 4px 8px; border-radius: 4px; color: var(--text-main); font-size: 14px; transition: background 0.2s; }
+.tree-folder-header:hover { background-color: var(--bg-body); }
+.tree-folder-header i { font-size: 14px; margin-right: 8px; color: #64748B; }
+
+.tree-files { list-style: none; padding: 0 0 0 12px; margin: 0; position: relative; }
+.tree-files::before { content: ''; position: absolute; top: 0; bottom: 14px; left: 14px; border-left: 1px dashed #CBD5E1; }
+
+.tree-file { position: relative; padding: 2px 0 2px 14px; }
+.tree-file::before { content: ''; position: absolute; top: 16px; left: 2px; width: 10px; border-top: 1px dashed #CBD5E1; }
+
+.tree-file a { display: flex; align-items: center; text-decoration: none; color: var(--text-muted); font-size: 13px; padding: 6px 8px; border-radius: 4px; transition: all 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-file a:hover { background-color: #F1F5F9; color: var(--text-main); }
+.tree-file a.active { background-color: #E0F2FE; color: #0284C7; font-weight: 600; }
+
+html.dark-theme .tree-folder-header:hover { background-color: #0F172A; }
+html.dark-theme .tree-files::before, html.dark-theme .tree-file::before { border-color: #475569; }
+html.dark-theme .tree-file a:hover { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1); color: #38BDF8; }
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -7,37 +31,49 @@
 </div>
 
 <div class="row g-3 h-100" style="min-height: calc(100vh - 120px);">
-    <!-- 左侧文件列表 -->
     <div class="col-md-auto" style="width: 220px;">
         <div class="card border-0 h-100">
             <div class="card-header bg-white border-bottom"><h6 class="mb-0 fw-bold">文件列表</h6></div>
-            <!-- 高度设为占满容器，支持滑动 -->
-            <div class="card-body p-0" style="overflow-y: auto; height: calc(100vh - 180px);">
-                <div class="list-group list-group-flush border-0">
-                    {% for f in files %}
-                    <a href="/scripts?file={{ f }}" class="list-group-item list-group-item-action border-0 text-truncate {% if current_file == f %}active fw-bold rounded-3 m-1 shadow-sm{% endif %}" style="padding: 8px 12px; font-size: 14px; display: block;" title="{{ f }}">
-                        <i class="bi {% if f.endswith('.js') %}bi-filetype-js text-warning{% elif f.endswith('.py') %}bi-filetype-py text-primary{% elif f.endswith('.sh') %}bi-filetype-sh text-success{% else %}bi-file-earmark-text text-muted{% endif %} me-2"></i>{{ f }}
-                    </a>
+            <div class="card-body p-2" style="overflow-y: auto; height: calc(100vh - 180px);">
+                <ul class="log-tree">
+                    {% for folder, files in tree.items() %}
+                    <li class="tree-folder">
+                        <div class="tree-folder-header" onclick="toggleTree(this)">
+                            <i class="bi {% if current_folder == folder %}bi-dash-square{% else %}bi-plus-square{% endif %}"></i>
+                            <span class="folder-name">{{ folder }}</span>
+                        </div>
+                        <ul class="tree-files" style="display: {% if current_folder == folder %}block{% else %}none{% endif %};">
+                            {% for f in files %}
+                            {% set file_path = folder ~ '/' ~ f if folder != '根目录' else f %}
+                            <li class="tree-file">
+                                <a href="/scripts?file={{ file_path }}" class="{% if current_file == file_path %}active{% endif %}" title="{{ file_path }}">
+                                    <i class="bi {% if f.endswith('.js') %}bi-filetype-js text-warning{% elif f.endswith('.py') %}bi-filetype-py text-primary{% elif f.endswith('.sh') %}bi-filetype-sh text-success{% else %}bi-file-earmark-text text-muted{% endif %} me-2"></i>{{ f }}
+                                </a>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </li>
                     {% endfor %}
-                </div>
+                </ul>
             </div>
         </div>
     </div>
 
     <!-- 右侧编辑器 -->
     <div class="col d-flex flex-column" style="min-width: 0;">
-        <div class="card border-0 flex-grow-1 h-100">
+        <div class="card border-0 flex-grow-1 h-100 d-flex flex-column">
             <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center">
-                <h6 class="mb-0 fw-medium font-monospace text-primary"><i class="bi bi-code-square me-2"></i>{{ current_file }}</h6>
-                <div>
-                    <button type="button" class="btn btn-primary btn-sm me-2" onclick="saveScript()"><i class="bi bi-floppy me-1"></i>保存脚本</button>
-                    <a href="/scripts/debug?file={{ current_file }}" class="btn btn-outline-success btn-sm me-2"><i class="bi bi-play-circle me-1"></i>进入调试</a>
+                <h6 class="mb-0 fw-medium font-monospace text-primary text-truncate" style="max-width: 50%;"><i class="bi bi-code-square me-2"></i>{{ current_file }}</h6>
+                <div class="d-flex flex-nowrap gap-2">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="saveScript()"><i class="bi bi-floppy me-1"></i>保存脚本</button>
+                    <a href="/scripts/debug?file={{ current_file }}" class="btn btn-outline-success btn-sm"><i class="bi bi-play-circle me-1"></i>进入调试</a>
                     <button type="button" class="btn btn-outline-warning btn-sm" onclick="checkSyntax()"><i class="bi bi-bug me-1"></i>语法检查</button>
                 </div>
             </div>
-            <!-- 编辑器高度自适应充满 -->
-            <div class="card-body p-0 position-relative h-100">
-                <div id="monaco-editor" style="width: 100%; height: 100%; min-height: calc(100vh - 180px); border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; overflow: hidden;"></div>
+            
+            <!-- 核心修复：添加 min-height 兜底，并使用绝对定位彻底解决 Monaco Editor 100% 高度塌陷为白屏的问题 -->
+            <div class="card-body p-0 position-relative flex-grow-1" style="min-height: 500px; overflow: hidden; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;">
+                <div id="monaco-editor" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0;"></div>
                 <form id="saveForm" method="POST" style="display:none;">
                     <input type="hidden" name="filename" value="{{ current_file }}">
                     <textarea name="content" id="hiddenContent"></textarea>
@@ -55,17 +91,41 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='vendor/monaco-editor/min/vs/loader.js') }}"></script>
 <script>
+    function toggleTree(element) {
+        const icon = element.querySelector('i.bi');
+        const childUl = element.nextElementSibling;
+        if (childUl.style.display === 'none') {
+            childUl.style.display = 'block';
+            icon.classList.remove('bi-plus-square');
+            icon.classList.add('bi-dash-square');
+        } else {
+            childUl.style.display = 'none';
+            icon.classList.remove('bi-dash-square');
+            icon.classList.add('bi-plus-square');
+        }
+    }
+
     require.config({ paths: { 'vs': "{{ url_for('static', filename='vendor/monaco-editor/min/vs') }}" }});
     let editor;
 
     let lang = 'plaintext';
-    const filename = "{{ current_file }}";
+    const filename = "{{ current_file_name }}";
     if(filename.endsWith('.js')) lang = 'javascript';
     else if(filename.endsWith('.py')) lang = 'python';
     else if(filename.endsWith('.sh')) lang = 'shell';
     else if(filename.endsWith('.json')) lang = 'json';
 
-    const safeContent = JSON.parse(document.getElementById('raw-script-content').textContent);
+    // 核心修复：加入 try-catch 保护机制，防止个别脚本存在转义异常导致 JS 崩溃白屏
+    let safeContent = "";
+    try {
+        const rawEl = document.getElementById('raw-script-content');
+        if (rawEl) {
+            safeContent = JSON.parse(rawEl.textContent);
+        }
+    } catch (e) {
+        safeContent = "// ⚠️ 系统解析该文件内容时发生错误。\n// 错误信息: " + e.toString();
+        console.error("Monaco Editor 解析脚本内容失败:", e);
+    }
 
     require(['vs/editor/editor.main'], function () {
         const theme = document.documentElement.classList.contains('dark-theme') ? 'vs-dark' : 'vs';

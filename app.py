@@ -21,12 +21,12 @@ import random
 import string
 import shutil  
 import secrets
-import logging 
+import logging
+import traceback
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename  
 from flask_socketio import SocketIO
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -42,7 +42,7 @@ aps_logger = logging.getLogger('apscheduler')
 aps_logger.setLevel(logging.DEBUG)
 # ---------------------------------------------------
 
-from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog
+from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog, Subscription
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -178,9 +178,10 @@ def global_security_check():
     session.modified = True
 
     allowed_direct_endpoints = [
-        'login', 'install', 'logout', 'tasks', 'static',
+        'login', 'install', 'logout', 'tasks', 'static', 'subs',
         'scripts_editor', 'scripts_debug', 'api_debug_run', 'api_debug_stop', 'logs', 'deps', 'envs', 'config_editor', 'settings',
-        'api_delete_logs', 'api_task_batch', 'api_scripts_save', 'api_update_check', 'api_update_do'
+        'api_delete_logs', 'api_task_batch', 'api_scripts_save', 'api_update_check', 'api_update_do',
+        'api_subs_add', 'api_subs_edit', 'api_subs_delete', 'api_subs_run', 'api_subs_log', 'api_subs_delete_tasks', 'api_subs_toggle'
     ]
     if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
         referer = request.headers.get("Referer")
@@ -249,6 +250,12 @@ def send_sys_notify(title, content):
 
 def get_combined_env():
     run_env = os.environ.copy()
+    
+    # 【安全防范】移除可能触发第三方JS脚本环境防盗链机制（自杀退出）的环境变量
+    keys_to_remove = [k for k in list(run_env.keys()) if 'GITHUB' in k.upper() or (isinstance(run_env[k], str) and 'GITHUB' in run_env[k].upper())]
+    for k in keys_to_remove:
+        run_env.pop(k, None)
+        
     run_env['PYTHONUNBUFFERED'] = '1'
 
     run_env['NODE_PATH'] = os.path.join(NODE_DIR, 'node_modules')
@@ -298,10 +305,14 @@ def execute_task(task_id):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_file_path = os.path.join(task_log_dir, f"{timestamp}.log")
 
+            # [终极修复] 剥离一切修饰，最本源的执行指令
             filename = task.command.strip()
-            cmd_list = ['node', '--require', './ql_env.js', filename] if filename.endswith('.js') else \
-                ['python', filename] if filename.endswith('.py') else \
-                    ['bash', filename] if filename.endswith('.sh') else [filename]
+            safe_rel_path = filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
+            if not safe_rel_path: safe_rel_path = filename
+
+            cmd_list = ['node', '--require', './ql_env.js', safe_rel_path] if safe_rel_path.endswith('.js') else \
+                ['python', safe_rel_path] if safe_rel_path.endswith('.py') else \
+                ['bash', safe_rel_path] if safe_rel_path.endswith('.sh') else [safe_rel_path]
 
             task.status = 'Running'
             task.last_run = start_time_str
@@ -319,40 +330,52 @@ def execute_task(task_id):
                 f.write(start_msg)
                 f.flush()
                 
-                process = subprocess.Popen(cmd_list, shell=False, env=run_env, stdout=subprocess.PIPE,
-                                           stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
-                                           encoding='utf-8', errors='replace')
-                running_processes[task_id] = process
+                try:
+                    process = subprocess.Popen(cmd_list, shell=False, env=run_env, stdout=subprocess.PIPE,
+                                               stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
+                                               encoding='utf-8', errors='replace')
+                    running_processes[task_id] = process
 
-                def timeout_monitor():
-                    time.sleep(max_timeout_seconds)
-                    if task_id in running_processes and running_processes[task_id] == process:
-                        if process.poll() is None:
-                            try:
-                                process.kill()
-                                warn_msg = f"\n❌ 任务执行超过最大设定时长 ({max_timeout_hours} 小时)，已被系统强制终止！\n"
-                                socketio.emit('log_stream', {'task_id': task_id, 'data': warn_msg})
-                                f.write(warn_msg)
-                            except:
-                                pass
+                    def timeout_monitor():
+                        time.sleep(max_timeout_seconds)
+                        if task_id in running_processes and running_processes[task_id] == process:
+                            if process.poll() is None:
+                                try:
+                                    process.kill()
+                                    warn_msg = f"\n❌ 任务执行超过最大设定时长 ({max_timeout_hours} 小时)，已被系统强制终止！\n"
+                                    socketio.emit('log_stream', {'task_id': task_id, 'data': warn_msg})
+                                    f.write(warn_msg)
+                                except:
+                                    pass
 
-                threading.Thread(target=timeout_monitor, daemon=True).start()
+                    threading.Thread(target=timeout_monitor, daemon=True).start()
 
-                for line in process.stdout:
-                    f.write(line)
-                    f.flush()  
-                    os.fsync(f.fileno())  
-                    socketio.emit('log_stream', {'task_id': task.id, 'data': line})
-                process.wait()
-                running_processes.pop(task_id, None)
+                    for line in process.stdout:
+                        f.write(line)
+                        f.flush()  
+                        os.fsync(f.fileno())  
+                        socketio.emit('log_stream', {'task_id': task.id, 'data': line})
+                        
+                    process.wait()
+                    running_processes.pop(task_id, None)
+                    returncode = process.returncode
+                    
+                except Exception as proc_e:
+                    err_trace = traceback.format_exc()
+                    err_msg = f"\n[核心崩溃] 进程启动发生致命异常:\n{err_trace}\n"
+                    f.write(err_msg)
+                    socketio.emit('log_stream', {'task_id': task.id, 'data': err_msg})
+                    returncode = -99
 
                 end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 end_msg = f"\n==============================================\n" \
-                          f"✅ 项目执行完毕 | 时间: {end_time_str}\n"
-                
-                if process.returncode is not None and process.returncode != -9:
-                    end_msg += f"🛑 退出码: {process.returncode}\n"
-                end_msg += f"==============================================\n"
+                          f"✅ 项目执行完毕 | 时间: {end_time_str}\n" \
+                          f"🛑 退出码: {returncode}\n" \
+                          f"==============================================\n"
+                          
+                # 如果执行极快且无输出，提示可能是环境变量未开启
+                if (time.time() - start_time) < 1.5 and returncode == 0 and os.path.getsize(log_file_path) < 500:
+                    end_msg += f"💡 [提示] 脚本瞬间执行完毕且无输出。可能原因：\n1. 面板环境变量(如 JD_COOKIE)缺失或被禁用。\n2. 脚本依赖的其他环境条件未满足而触发了静默 return。\n"
 
                 f.write(end_msg)
                 socketio.emit('log_stream', {'task_id': task.id, 'data': end_msg})
@@ -366,8 +389,9 @@ def execute_task(task_id):
                 socketio.emit('task_status', {'task_id': task.id, 'status': 'Idle', 'duration': f"{duration}s"})
 
         except Exception as e:
+            err_trace = traceback.format_exc()
             running_processes.pop(task_id, None)
-            socketio.emit('log_stream', {'task_id': task_id, 'data': f"\n❌ 错误: {str(e)}\n"})
+            socketio.emit('log_stream', {'task_id': task_id, 'data': f"\n❌ 错误终止:\n{err_trace}\n"})
             current_task = Task.query.get(task_id)
             if current_task:
                 current_task.status = 'Error'
@@ -377,6 +401,194 @@ def execute_task(task_id):
         finally:
             db.session.remove()
 
+def parse_script_meta(filepath, default_name):
+    name = default_name
+    cron = None
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read(8192)
+            name_match = re.search(r'new\s+Env\([\'"](.*?)[\'"]\)', content)
+            if name_match:
+                name = name_match.group(1)
+            
+            cron_match = re.search(r'(?:cron|@cron)[^\w\d]+([0-9\*/,-]+\s+[0-9\*/,-]+\s+[0-9\*/,-]+\s+[0-9\*/,-]+\s+[0-9\*/,-]+(?:\s+[0-9\*/,-]+)?)', content, re.IGNORECASE)
+            if cron_match:
+                raw_cron = cron_match.group(1).strip()
+                raw_cron = re.sub(r'\s*\*\s*/\s*$', '', raw_cron)
+                cron = raw_cron.strip()
+    except:
+        pass
+    return name, cron
+
+def execute_subscription(sub_id):
+    with app.app_context():
+        try:
+            sub = Subscription.query.get(sub_id)
+            if not sub or getattr(sub, 'is_disabled', 0) == 1: return
+
+            start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            stream_id = f"sub_{sub.id}"
+            
+            sub.status = 'Running'
+            sub.last_run = start_time_str
+            db.session.commit()
+
+            sub_log_dir = os.path.join(LOGS_DIR, 'subscriptions')
+            os.makedirs(sub_log_dir, exist_ok=True)
+            log_file_path = os.path.join(sub_log_dir, f"sub_{sub.id}.log")
+
+            start_msg = f"==============================================\n" \
+                        f"🚀 开始执行订阅任务 | 时间: {start_time_str}\n" \
+                        f"👉 订阅名称: {sub.name}\n" \
+                        f"👉 目标地址: {sub.url}\n" \
+                        f"==============================================\n\n"
+
+            socketio.emit('sub_status', {'sub_id': sub.id, 'status': 'Running', 'last_run': sub.last_run})
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': start_msg, 'clear': True})
+
+            with open(log_file_path, 'w', encoding='utf-8') as log_f:
+                log_f.write(start_msg)
+                
+                def write_log(msg):
+                    log_f.write(msg)
+                    log_f.flush()
+                    socketio.emit('log_stream', {'task_id': stream_id, 'data': msg})
+
+                run_env = get_combined_env()
+
+                if sub.type == 'single_file':
+                    target_dir = os.path.join(SCRIPTS_DIR, 'single_scripts')
+                    os.makedirs(target_dir, exist_ok=True)
+                    orig_name = sub.url.split('/')[-1] or 'script.js'
+                    ext = orig_name.split('.')[-1] if '.' in orig_name else 'js'
+                    filename = f"{sub.alias}.{ext}"
+                    filepath = os.path.join(target_dir, filename)
+                    
+                    write_log(f"⬇️ 开始下载单文件: {orig_name} -> 统一保存为 {filename}\n")
+                    req = urllib.request.Request(sub.url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=30) as res, open(filepath, 'wb') as f:
+                        f.write(res.read())
+                    write_log(f"✅ 下载完成\n")
+                    files_to_process = [filename]
+                    current_tasks = Task.query.filter(Task.command.like(f"single_scripts/{sub.alias}.%")).all()
+                else:
+                    target_dir = os.path.join(SCRIPTS_DIR, sub.alias)
+                    if not os.path.exists(os.path.join(target_dir, '.git')):
+                        write_log(f"📦 开始克隆仓库: {sub.url}\n")
+                        cmd = ['git', 'clone']
+                        if sub.branch:
+                            cmd.extend(['-b', sub.branch])
+                        cmd.extend([sub.url, sub.alias])
+                        process = subprocess.Popen(cmd, cwd=SCRIPTS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env)
+                    else:
+                        write_log(f"📦 仓库已存在，开始拉取最新代码...\n")
+                        cmd_fetch = ['git', 'fetch', '--all']
+                        subprocess.run(cmd_fetch, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env)
+                        
+                        cmd_reset = ['git', 'reset', '--hard', f"origin/{sub.branch if sub.branch else 'HEAD'}"]
+                        process = subprocess.Popen(cmd_reset, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env)
+
+                    for line in process.stdout:
+                        write_log(line)
+                    process.wait()
+
+                    if process.returncode != 0:
+                        raise Exception(f"Git 操作失败，退出码: {process.returncode}")
+
+                    files_to_process = []
+                    for root, dirs, files in os.walk(target_dir):
+                        if '.git' in root: continue
+                        for f in files:
+                            rel_path = os.path.relpath(os.path.join(root, f), target_dir).replace('\\', '/')
+                            files_to_process.append(rel_path)
+                            
+                    current_tasks = Task.query.filter(Task.command.like(f"{sub.alias}/%")).all()
+
+                write_log(f"\n🔍 开始根据规则过滤文件...\n")
+                
+                ext_pattern = re.compile(rf"\.({sub.extensions})$") if sub.extensions else None
+                white_pattern = re.compile(sub.whitelist) if sub.whitelist else None
+                black_pattern = re.compile(sub.blacklist) if sub.blacklist else None
+                depend_pattern = re.compile(sub.depend_file) if sub.depend_file else None
+
+                matched_files = []
+                for f in files_to_process:
+                    if not f.endswith(('.js', '.py', '.sh')):
+                        continue
+                    if depend_pattern and depend_pattern.search(f):
+                        continue
+                    if ext_pattern and not ext_pattern.search(f):
+                        continue
+                    if white_pattern and not white_pattern.search(f):
+                        continue
+                    if black_pattern and black_pattern.search(f):
+                        continue
+                    matched_files.append(f)
+
+                write_log(f"✅ 过滤完成，共匹配到 {len(matched_files)} 个任务脚本\n\n")
+
+                existing_commands = {t.command: t for t in current_tasks}
+                processed_commands = set()
+
+                for f in matched_files:
+                    filepath = os.path.join(target_dir, f)
+                    command = f"single_scripts/{f}" if sub.type == 'single_file' else f"{sub.alias}/{f}"
+                    processed_commands.add(command)
+                    
+                    script_name, script_cron = parse_script_meta(filepath, f)
+                    cron_to_use = script_cron if script_cron else (sub.cron if sub.cron else '0 0 * * *')
+                    
+                    if command in existing_commands:
+                        t = existing_commands[command]
+                        updated = False
+                        if t.name != script_name:
+                            t.name = script_name
+                            updated = True
+                        if t.cron != cron_to_use:
+                            t.cron = cron_to_use
+                            updated = True
+                        if updated:
+                            db.session.commit()
+                            add_job_to_scheduler(t)
+                            write_log(f"🔄 更新任务: {script_name} ({command})\n")
+                    else:
+                        if sub.auto_add == 1:
+                            new_t = Task(name=script_name, command=command, cron=cron_to_use, status='Idle')
+                            db.session.add(new_t)
+                            db.session.commit()
+                            add_job_to_scheduler(new_t)
+                            write_log(f"➕ 新增任务: {script_name} ({command})\n")
+
+                if sub.auto_del == 1:
+                    for cmd, t in existing_commands.items():
+                        if cmd not in processed_commands:
+                            if scheduler.get_job(f"task_{t.id}"): 
+                                scheduler.remove_job(f"task_{t.id}")
+                            db.session.delete(t)
+                            write_log(f"➖ 删除失效任务: {t.name} ({cmd})\n")
+                    db.session.commit()
+
+                end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                end_msg = f"\n==============================================\n" \
+                          f"✅ 订阅执行完毕 | 时间: {end_time_str}\n" \
+                          f"==============================================\n"
+                write_log(end_msg)
+
+            current_sub = Subscription.query.get(sub_id)
+            if current_sub and current_sub.status == 'Running':
+                current_sub.status = 'Idle'
+                db.session.commit()
+                socketio.emit('sub_status', {'sub_id': sub.id, 'status': 'Idle'})
+
+        except Exception as e:
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n❌ 错误: {str(e)}\n"})
+            current_sub = Subscription.query.get(sub_id)
+            if current_sub:
+                current_sub.status = 'Error'
+                db.session.commit()
+                socketio.emit('sub_status', {'sub_id': sub.id, 'status': 'Error'})
+        finally:
+            db.session.remove()
 
 def add_job_to_scheduler(task):
     if getattr(task, 'is_disabled', 0) == 1: return
@@ -385,6 +597,17 @@ def add_job_to_scheduler(task):
     try:
         tz_str = os.environ.get('TZ', 'Asia/Shanghai')
         scheduler.add_job(execute_task, CronTrigger.from_crontab(task.cron, timezone=tz_str), args=[task.id], id=job_id)
+    except:
+        pass
+
+def add_sub_job_to_scheduler(sub):
+    if getattr(sub, 'is_disabled', 0) == 1: return
+    job_id = f"sub_{sub.id}"
+    if scheduler.get_job(job_id): scheduler.remove_job(job_id)
+    try:
+        tz_str = os.environ.get('TZ', 'Asia/Shanghai')
+        if sub.cron:
+            scheduler.add_job(execute_subscription, CronTrigger.from_crontab(sub.cron, timezone=tz_str), args=[sub.id], id=job_id)
     except:
         pass
 
@@ -627,6 +850,138 @@ def tasks():
 
     return render_template('tasks.html', pagination=pagination, status_filter=status_filter, per_page=per_page)
 
+
+@app.route('/subs')
+@login_required
+def subs():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    pagination = Subscription.query.order_by(Subscription.is_disabled.asc(), Subscription.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    return render_template('subs.html', pagination=pagination, per_page=per_page)
+
+@app.route('/api/subs/add', methods=['POST'])
+@login_required
+def api_subs_add():
+    data = request.json
+    alias = data.get('alias', '').strip()
+    if not alias: alias = f"sub_{int(time.time())}"
+    
+    new_sub = Subscription(
+        name=data.get('name'),
+        type=data.get('type', 'public_repo'),
+        url=data.get('url'),
+        alias=alias,
+        branch=data.get('branch', ''),
+        schedule_type=data.get('schedule_type', 'crontab'),
+        cron=data.get('cron', ''),
+        whitelist=data.get('whitelist', ''),
+        blacklist=data.get('blacklist', ''),
+        depend_file=data.get('depend_file', ''),
+        extensions=data.get('extensions', ''),
+        auto_add=1 if data.get('auto_add') else 0,
+        auto_del=1 if data.get('auto_del') else 0,
+        status='Idle',
+        is_disabled=0
+    )
+    db.session.add(new_sub)
+    db.session.commit()
+    add_sub_job_to_scheduler(new_sub)
+    return jsonify({"status": "success"})
+
+@app.route('/api/subs/edit/<int:id>', methods=['POST'])
+@login_required
+def api_subs_edit(id):
+    sub = Subscription.query.get(id)
+    if not sub: return jsonify({"status": "error"})
+    data = request.json
+    
+    sub.name = data.get('name')
+    sub.type = data.get('type', 'public_repo')
+    sub.url = data.get('url')
+    sub.alias = data.get('alias', '').strip() or sub.alias
+    sub.branch = data.get('branch', '')
+    sub.cron = data.get('cron', '')
+    sub.whitelist = data.get('whitelist', '')
+    sub.blacklist = data.get('blacklist', '')
+    sub.depend_file = data.get('depend_file', '')
+    sub.extensions = data.get('extensions', '')
+    sub.auto_add = 1 if data.get('auto_add') else 0
+    sub.auto_del = 1 if data.get('auto_del') else 0
+    
+    db.session.commit()
+    add_sub_job_to_scheduler(sub)
+    return jsonify({"status": "success"})
+
+@app.route('/api/subs/toggle/<int:id>')
+@login_required
+def api_subs_toggle(id):
+    sub = Subscription.query.get(id)
+    if sub:
+        sub.is_disabled = 1 if getattr(sub, 'is_disabled', 0) == 0 else 0
+        db.session.commit()
+        if sub.is_disabled == 1:
+            if scheduler.get_job(f"sub_{sub.id}"): scheduler.remove_job(f"sub_{sub.id}")
+        else:
+            add_sub_job_to_scheduler(sub)
+    return redirect(url_for('subs'))
+
+@app.route('/api/subs/run/<int:id>')
+@login_required
+def api_subs_run(id):
+    sub = Subscription.query.get(id)
+    if not sub: return jsonify({"status": "error"})
+    if getattr(sub, 'is_disabled', 0) == 1: return jsonify({"status": "error", "msg": "该订阅已被禁用"})
+    threading.Thread(target=execute_subscription, args=(id,)).start()
+    return jsonify({"status": "success"})
+
+@app.route('/api/subs/delete/<int:id>')
+@login_required
+def api_subs_delete(id):
+    sub = Subscription.query.get(id)
+    if sub:
+        if scheduler.get_job(f"sub_{sub.id}"): scheduler.remove_job(f"sub_{sub.id}")
+        db.session.delete(sub)
+        db.session.commit()
+    return redirect(url_for('subs'))
+
+@app.route('/api/subs/delete_tasks/<int:id>')
+@login_required
+def api_subs_delete_tasks(id):
+    sub = Subscription.query.get(id)
+    if sub:
+        if sub.type == 'single_file':
+            tasks = Task.query.filter(Task.command.like(f"single_scripts/{sub.alias}.%")).all()
+            for task in tasks:
+                file_path = os.path.join(SCRIPTS_DIR, task.command)
+                if os.path.exists(file_path):
+                    try: os.remove(file_path)
+                    except: pass
+        else:
+            tasks = Task.query.filter(Task.command.like(f"{sub.alias}/%")).all()
+            target_dir = os.path.join(SCRIPTS_DIR, sub.alias)
+            if os.path.exists(target_dir) and os.path.isdir(target_dir):
+                try: shutil.rmtree(target_dir, ignore_errors=True)
+                except: pass
+
+        for task in tasks:
+            if task.id in running_processes:
+                try: running_processes[task.id].kill()
+                except: pass
+            if scheduler.get_job(f"task_{task.id}"): 
+                scheduler.remove_job(f"task_{task.id}")
+            db.session.delete(task)
+            
+        db.session.commit()
+    return redirect(url_for('subs'))
+
+@app.route('/api/subs/log/<int:id>')
+@login_required
+def api_subs_log(id):
+    log_file_path = os.path.join(LOGS_DIR, 'subscriptions', f"sub_{id}.log")
+    if os.path.exists(log_file_path):
+        with open(log_file_path, 'r', encoding='utf-8') as f:
+            return jsonify({"content": f.read()})
+    return jsonify({"content": "暂无日志或尚未执行过..."})
 
 @app.route('/task/add', methods=['POST'])
 @login_required
@@ -1002,23 +1357,52 @@ def config_editor():
 @app.route('/scripts', methods=['GET', 'POST'])
 @login_required
 def scripts_editor():
-    files = [f for f in os.listdir(SCRIPTS_DIR) if os.path.isfile(os.path.join(SCRIPTS_DIR, f))]
+    tree = {}
+    for root, dirs, files in os.walk(SCRIPTS_DIR):
+        if '.git' in root or '__pycache__' in root:
+            continue
+        rel_dir = os.path.relpath(root, SCRIPTS_DIR).replace('\\', '/')
+        if rel_dir == '.': rel_dir = '根目录'
+        
+        valid_files = [f for f in files if f.endswith(('.js', '.py', '.sh', '.json', '.txt'))]
+        if valid_files:
+            tree[rel_dir] = sorted(valid_files)
+            
+    sorted_tree = {'根目录': tree.pop('根目录', [])}
+    sorted_tree.update(dict(sorted(tree.items())))
 
-    raw_current_file = request.args.get('file', files[0] if files else 'new_script.py')
-    current_file = secure_filename(raw_current_file)
+    raw_current_file = request.args.get('file', 'new_script.py')
+    
+    safe_rel_path = raw_current_file.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
+    if not safe_rel_path: 
+        safe_rel_path = 'new_script.py'
+        
+    target_path = os.path.join(SCRIPTS_DIR, safe_rel_path)
+    
+    current_file = safe_rel_path
+    current_folder = os.path.dirname(current_file) or '根目录'
+    current_file_name = os.path.basename(current_file)
 
     content = ""
     if request.method == 'POST':
         raw_filename = request.form.get('filename')
         if raw_filename:
-            filename_to_save = secure_filename(raw_filename)
-            with open(os.path.join(SCRIPTS_DIR, filename_to_save), 'w', encoding='utf-8') as f:
+            s_rel = raw_filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
+            save_path = os.path.join(SCRIPTS_DIR, s_rel)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, 'w', encoding='utf-8') as f:
                 f.write(request.form.get('content').replace('\r\n', '\n'))
-            return redirect(url_for('scripts_editor', file=filename_to_save))
+            return redirect(url_for('scripts_editor', file=s_rel))
 
-    if os.path.exists(os.path.join(SCRIPTS_DIR, current_file)):
-        with open(os.path.join(SCRIPTS_DIR, current_file), 'r', encoding='utf-8') as f: content = f.read()
-    return render_template('scripts.html', files=files, current_file=current_file, content=content)
+    if os.path.exists(target_path) and os.path.isfile(target_path):
+        try:
+            with open(target_path, 'r', encoding='utf-8') as f: content = f.read()
+        except UnicodeDecodeError:
+            content = "// ⚠️ 无法读取该文件内容，它可能不是标准的 UTF-8 文本编码文件。"
+    else:
+        content = f"// ⚠️ 文件不存在: {target_path}\n// 您可以在右上方直接编写代码并点击保存，系统会自动为您创建它。"
+        
+    return render_template('scripts.html', tree=sorted_tree, current_folder=current_folder, current_file=current_file, current_file_name=current_file_name, content=content)
 
 
 @app.route('/api/scripts/save', methods=['POST'])
@@ -1028,9 +1412,14 @@ def api_scripts_save():
     content = request.form.get('content', '').replace('\r\n', '\n')
     if not raw_filename: return jsonify({"status": "error", "msg": "文件名为空"})
     
-    filename_to_save = secure_filename(raw_filename)
+    s_rel = raw_filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
+    if not s_rel: return jsonify({"status": "error", "msg": "非法路径禁止保存"})
+    
+    save_path = os.path.join(SCRIPTS_DIR, s_rel)
+        
     try:
-        with open(os.path.join(SCRIPTS_DIR, filename_to_save), 'w', encoding='utf-8') as f:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, 'w', encoding='utf-8') as f:
             f.write(content)
         return jsonify({"status": "success"})
     except Exception as e:
@@ -1040,25 +1429,47 @@ def api_scripts_save():
 @app.route('/scripts/debug', methods=['GET'])
 @login_required
 def scripts_debug():
-    files = [f for f in os.listdir(SCRIPTS_DIR) if os.path.isfile(os.path.join(SCRIPTS_DIR, f))]
-
+    files = []
+    for root, dirs, f_names in os.walk(SCRIPTS_DIR):
+        if '.git' in root or '__pycache__' in root:
+            continue
+        for f in f_names:
+            if f.endswith(('.js', '.py', '.sh', '.json', '.txt')):
+                files.append(os.path.relpath(os.path.join(root, f), SCRIPTS_DIR).replace('\\', '/'))
+                
+    files = sorted(files)
     raw_current_file = request.args.get('file', files[0] if files else 'new_script.py')
-    current_file = secure_filename(raw_current_file)
+    
+    safe_rel_path = raw_current_file.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
+    if not safe_rel_path: safe_rel_path = 'new_script.py'
+    
+    target_path = os.path.join(SCRIPTS_DIR, safe_rel_path)
+    current_file = safe_rel_path
 
     content = ""
-    if os.path.exists(os.path.join(SCRIPTS_DIR, current_file)):
-        with open(os.path.join(SCRIPTS_DIR, current_file), 'r', encoding='utf-8') as f:
-            content = f.read()
+    if os.path.exists(target_path) and os.path.isfile(target_path):
+        try:
+            with open(target_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            content = "// ⚠️ 无法读取该文件内容。"
+    else:
+        content = f"// ⚠️ 文件不存在"
+        
     return render_template('debug.html', files=files, current_file=current_file, content=content)
 
 
 def execute_debug(filename, stream_id):
     with app.app_context():
         try:
+            safe_rel_path = filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
+            if not safe_rel_path: raise Exception("非法路径")
+            
             run_env = get_combined_env()
-            cmd_list = ['node', '--require', './ql_env.js', filename] if filename.endswith('.js') else \
-                ['python', filename] if filename.endswith('.py') else \
-                    ['bash', filename] if filename.endswith('.sh') else [filename]
+            
+            cmd_list = ['node', '--require', './ql_env.js', safe_rel_path] if safe_rel_path.endswith('.js') else \
+                ['python', safe_rel_path] if safe_rel_path.endswith('.py') else \
+                ['bash', safe_rel_path] if safe_rel_path.endswith('.sh') else [safe_rel_path]
 
             socketio.emit('log_stream',
                           {'task_id': stream_id, 'data': f"🚀 开始调试执行: {' '.join(cmd_list)}\n", 'clear': True})
@@ -1085,10 +1496,8 @@ def api_debug_run():
     raw_filename = request.form.get('filename')
     if not raw_filename: return jsonify({"status": "error"})
 
-    filename = secure_filename(raw_filename)
-
     stream_id = f"debug_{int(time.time())}"
-    threading.Thread(target=execute_debug, args=(filename, stream_id), daemon=True).start()
+    threading.Thread(target=execute_debug, args=(raw_filename, stream_id), daemon=True).start()
     return jsonify({"status": "success", "stream_id": stream_id})
 
 
@@ -1117,7 +1526,7 @@ def check_script_syntax():
     if not raw_filename or not content.strip():
         return jsonify({"status": "ok", "msg": ""})
 
-    filename = secure_filename(raw_filename)
+    filename = os.path.basename(raw_filename)
 
     try:
         if filename.endswith('.py'):
@@ -1367,7 +1776,6 @@ def api_update_do():
                         
                     files_to_copy.append((os.path.join(dirpath, filename), os.path.join(BASE_DIR, rel_path)))
 
-            # 【核心修改点 1】：强制让 app.py 放在最后一个覆盖，防止因覆盖提前引发的容器猝死
             files_to_copy.sort(key=lambda x: 1 if os.path.basename(x[1]) == 'app.py' else 0)
 
             total_files = len(files_to_copy)
@@ -1452,6 +1860,28 @@ def run_scheduler_forever():
             except Exception:
                 pass
 
+        try:
+            with engine.connect() as conn:
+                conn.execute(text('SELECT alias FROM subscription LIMIT 1'))
+        except Exception:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text('ALTER TABLE subscription ADD COLUMN alias VARCHAR(50) DEFAULT "sub_default"'))
+                print("Successfully migrated tasks.db subscription with alias column.")
+            except Exception:
+                pass
+
+        try:
+            with engine.connect() as conn:
+                conn.execute(text('SELECT is_disabled FROM subscription LIMIT 1'))
+        except Exception:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text('ALTER TABLE subscription ADD COLUMN is_disabled INTEGER DEFAULT 0'))
+                print("Successfully migrated tasks.db subscription with is_disabled column.")
+            except Exception:
+                pass
+
         env_engine = db.engines['envs']
         try:
             with env_engine.connect() as conn:
@@ -1480,6 +1910,7 @@ def run_scheduler_forever():
         try:
             Task.query.filter_by(status='Running').update({'status': 'Idle'})
             Dependency.query.filter(Dependency.status.in_(['Installing', 'Uninstalling'])).update({'status': 'Error'})
+            Subscription.query.filter_by(status='Running').update({'status': 'Idle'})
             db.session.commit()
         except:
             pass
@@ -1487,10 +1918,33 @@ def run_scheduler_forever():
         ql_env_path = os.path.join(SCRIPTS_DIR, 'ql_env.js')
         with open(ql_env_path, 'w', encoding='utf-8') as f:
             f.write("""if (!console.logErr) { console.logErr = function(e) { console.error(e.message || e); }; }
+
+// 彻底拦截 dotenvx 的输出(拦截底层标准输出/错误流)
+const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = function(chunk, encoding, callback) {
+    if (typeof chunk === 'string' && chunk.includes('[dotenv@')) return true;
+    return originalStdoutWrite(chunk, encoding, callback);
+};
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+process.stderr.write = function(chunk, encoding, callback) {
+    if (typeof chunk === 'string' && chunk.includes('[dotenv@')) return true;
+    return originalStderrWrite(chunk, encoding, callback);
+};
+
 const _log = console.log;
 console.log = function(...args) {
-    if (typeof args[0] === 'string' && args[0].includes('[dotenv@') && args[0].includes('tip:')) return;
+    if (typeof args[0] === 'string' && args[0].includes('[dotenv@')) return;
     _log.apply(console, args);
+};
+
+// 【核心机制拦截】防止第三方混淆JS脚本检测 process.env 包含 GITHUB 字样而触发防盗链并直接 process.exit(0)
+const originalStringify = JSON.stringify;
+JSON.stringify = function(value, replacer, space) {
+    let result = originalStringify(value, replacer, space);
+    if (value === process.env && typeof result === 'string') {
+        result = result.replace(/GITHUB/g, 'G_I_T_H_U_B');
+    }
+    return result;
 };
 """)
 
@@ -1550,6 +2004,8 @@ console.log = function(...args) {
             try:
                 for task in Task.query.all(): 
                     add_job_to_scheduler(task)
+                for sub in Subscription.query.all():
+                    add_sub_job_to_scheduler(sub)
             except:
                 pass
 
