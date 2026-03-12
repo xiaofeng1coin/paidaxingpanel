@@ -24,6 +24,13 @@ import secrets
 import logging
 import traceback
 from datetime import datetime, timedelta
+
+# --- 新增：跨平台安全的子进程黑窗口隐藏参数 ---
+SUBPROCESS_KWARGS = {}
+if os.name == 'nt':
+    SUBPROCESS_KWARGS['creationflags'] = 0x08000000
+# ----------------------------------------------
+
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -246,7 +253,7 @@ def send_sys_notify(title, content):
             sys_notify_js = os.path.join(SCRIPTS_DIR, 'sys_notify.js')
             if os.path.exists(sys_notify_js):
                 try:
-                    subprocess.run(['node', 'sys_notify.js', title, content], env=env, cwd=SCRIPTS_DIR, timeout=30)
+                    subprocess.run(['node', 'sys_notify.js', title, content], env=env, cwd=SCRIPTS_DIR, timeout=30, **SUBPROCESS_KWARGS)
                 except Exception as e:
                     pass
 
@@ -256,7 +263,6 @@ def send_sys_notify(title, content):
 def get_combined_env():
     run_env = os.environ.copy()
     
-    # 【安全防范】移除可能触发第三方JS脚本环境防盗链机制（自杀退出）的环境变量
     keys_to_remove = [k for k in list(run_env.keys()) if 'GITHUB' in k.upper() or (isinstance(run_env[k], str) and 'GITHUB' in run_env[k].upper())]
     for k in keys_to_remove:
         run_env.pop(k, None)
@@ -310,7 +316,6 @@ def execute_task(task_id):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_file_path = os.path.join(task_log_dir, f"{timestamp}.log")
 
-            # [终极修复] 剥离一切修饰，最本源的执行指令
             filename = task.command.strip()
             safe_rel_path = filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
             if not safe_rel_path: safe_rel_path = filename
@@ -338,7 +343,7 @@ def execute_task(task_id):
                 try:
                     process = subprocess.Popen(cmd_list, shell=False, env=run_env, stdout=subprocess.PIPE,
                                                stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
-                                               encoding='utf-8', errors='replace')
+                                               encoding='utf-8', errors='replace', **SUBPROCESS_KWARGS)
                     running_processes[task_id] = process
 
                     def timeout_monitor():
@@ -378,7 +383,6 @@ def execute_task(task_id):
                           f"🛑 退出码: {returncode}\n" \
                           f"==============================================\n"
                           
-                # 如果执行极快且无输出，提示可能是环境变量未开启
                 if (time.time() - start_time) < 1.5 and returncode == 0 and os.path.getsize(log_file_path) < 500:
                     end_msg += f"💡 [提示] 脚本瞬间执行完毕且无输出。可能原因：\n1. 面板环境变量(如 JD_COOKIE)缺失或被禁用。\n2. 脚本依赖的其他环境条件未满足而触发了静默 return。\n"
 
@@ -484,14 +488,14 @@ def execute_subscription(sub_id):
                         if sub.branch:
                             cmd.extend(['-b', sub.branch])
                         cmd.extend([sub.url, sub.alias])
-                        process = subprocess.Popen(cmd, cwd=SCRIPTS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env)
+                        process = subprocess.Popen(cmd, cwd=SCRIPTS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
                     else:
                         write_log(f"📦 仓库已存在，开始拉取最新代码...\n")
                         cmd_fetch = ['git', 'fetch', '--all']
-                        subprocess.run(cmd_fetch, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env)
+                        subprocess.run(cmd_fetch, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
                         
                         cmd_reset = ['git', 'reset', '--hard', f"origin/{sub.branch if sub.branch else 'HEAD'}"]
-                        process = subprocess.Popen(cmd_reset, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env)
+                        process = subprocess.Popen(cmd_reset, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
 
                     for line in process.stdout:
                         write_log(line)
@@ -1182,7 +1186,7 @@ def execute_dependency_cmd(dep_id, action):
                 
                 process = subprocess.Popen(cmd, shell=True, env=get_combined_env(), stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, cwd=run_cwd, text=True, bufsize=1,
-                                           encoding='utf-8', errors='replace')
+                                           encoding='utf-8', errors='replace', **SUBPROCESS_KWARGS)
                 for line in process.stdout:
                     f.write(line)
                     f.flush()               
@@ -1481,7 +1485,7 @@ def execute_debug(filename, stream_id):
 
             process = subprocess.Popen(cmd_list, shell=False, env=run_env, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
-                                       encoding='utf-8', errors='replace')
+                                       encoding='utf-8', errors='replace', **SUBPROCESS_KWARGS)
             debug_processes[stream_id] = process
             
             for line in process.stdout:
@@ -1542,7 +1546,7 @@ def check_script_syntax():
                 f.write(content)
                 temp_name = f.name
             try:
-                result = subprocess.run(['node', '--check', temp_name], capture_output=True, text=True)
+                result = subprocess.run(['node', '--check', temp_name], capture_output=True, text=True, **SUBPROCESS_KWARGS)
                 if result.returncode == 0:
                     return jsonify({"status": "ok", "msg": "Node.js 语法无误"})
                 else:
@@ -1561,7 +1565,7 @@ def check_script_syntax():
                 f.write(content)
                 temp_name = f.name
             try:
-                result = subprocess.run(['bash', '-n', temp_name], capture_output=True, text=True)
+                result = subprocess.run(['bash', '-n', temp_name], capture_output=True, text=True, **SUBPROCESS_KWARGS)
                 if result.returncode == 0:
                     return jsonify({"status": "ok", "msg": "Shell 语法无误"})
                 else:
@@ -2078,46 +2082,56 @@ if __name__ == '__main__':
         import webview
         from pystray import Icon, Menu, MenuItem
         from PIL import Image, ImageDraw
+        import ctypes
         
+        # 1. 拦截多开：如果检测到已有相同进程锁，则自动静默退出，不再打开新窗口
+        mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "PatrickPanel_SingleInstance_Mutex")
+        if ctypes.windll.kernel32.GetLastError() == 183: # ERROR_ALREADY_EXISTS
+            sys.exit(0)
+
         # 静默 Flask 的终端日志输出
         log = logging.getLogger('werkzeug')
         log.setLevel(logging.ERROR)
         
         def start_server():
             socketio.run(app, host='127.0.0.1', port=5000, allow_unsafe_werkzeug=True)
+
         # 后台静默启动本地服务器
         threading.Thread(target=start_server, daemon=True).start()
         
-        # 创建前端窗口
-        window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800)
-        # 1. 拦截窗口关闭事件：不退出，而是隐藏窗口
+        # 2. 增加 text_select=True 使界面内的文字可以被鼠标选中和复制
+        window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800, text_select=True)
+
         def on_closing():
             window.hide()
-            return False  # 返回 False 阻止窗口被真正销毁
+            return False
+
         window.events.closing += on_closing
-        # 2. 定义托盘菜单的操作
+
         def show_window(icon, item):
             window.show()
+
         def exit_app(icon, item):
-            icon.stop()        # 停止托盘
-            window.destroy()   # 强制销毁窗口
-            os._exit(0)        # 彻底杀死所有后台线程
-        # 3. 动态绘制一个简单的托盘图标 (蓝底白方块)，避免打包 ico 找不到路径的问题
+            icon.stop()
+            # 3. 解决退出卡死：不再调用 window.destroy() 等待主线程，直接使用底层的退出指令强杀自己
+            os._exit(0)
+
         def create_tray_icon():
             image = Image.new('RGB', (64, 64), color=(37, 99, 235))
             draw = ImageDraw.Draw(image)
             draw.rectangle((16, 16, 48, 48), fill="white")
             return image
-        # 4. 初始化右下角系统托盘
+
         tray_menu = Menu(
             MenuItem("显示面板", show_window, default=True),
             MenuItem("彻底退出", exit_app)
         )
         tray_icon = Icon("PatrickPanel", create_tray_icon(), "派大星面板", menu=tray_menu)
-        # 在独立线程运行托盘，防止阻塞主窗口渲染
+
+        # 在独立线程运行托盘
         threading.Thread(target=tray_icon.run, daemon=True).start()
         
-        # 前台拉起软件界面 (阻塞主线程)
+        # 前台拉起软件界面
         webview.start()
     else:
         # 正常 Docker 环境保持原样
