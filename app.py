@@ -44,8 +44,13 @@ aps_logger.setLevel(logging.DEBUG)
 
 from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog, Subscription
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+# 核心修改：兼容 PyInstaller exe 环境与 Docker/源码环境
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+    DATA_DIR = os.path.join(os.path.dirname(sys.executable), 'data')
+else:
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+    DATA_DIR = os.path.join(BASE_DIR, 'data')
 
 SCRIPTS_DIR = os.path.join(DATA_DIR, 'scripts')
 LOGS_DIR = os.path.join(DATA_DIR, 'logs')
@@ -2067,3 +2072,8 @@ if len(sys.argv) > 1:
                         db.session.commit()
                         print("\n✅ 成功：账号/密码已重置！\n")
         sys.exit(0)
+    
+if __name__ == '__main__':
+    # 针对 PyInstaller，为了解决 Gunicorn 无法在 Windows 上运行的问题，提供原生的 Waitress 或 Eventlet 方案
+    # 但最简单的是直接利用 app.run 或 socketio.run 运行在生产环境（这里用 socketio.run 启动）
+    socketio.run(app, host='0.0.0.0', port=5000)

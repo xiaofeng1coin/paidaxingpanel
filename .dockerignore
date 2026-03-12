@@ -57,3 +57,5 @@ docs/
 Dockerfile
 .dockerignore
 docker-compose.yml
+# PyInstaller
+package.spec
