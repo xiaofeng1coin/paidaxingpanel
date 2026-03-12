@@ -18,7 +18,8 @@ a = Analysis(
         'flask_sqlalchemy',
         'flask_login',
         'flask_socketio',
-        'apscheduler'
+        'apscheduler',
+        'webview'
     ],
     hookspath=[],
     hooksconfig={},

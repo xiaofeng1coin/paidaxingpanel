@@ -2074,6 +2074,29 @@ if len(sys.argv) > 1:
         sys.exit(0)
     
 if __name__ == '__main__':
-    # 针对 PyInstaller，为了解决 Gunicorn 无法在 Windows 上运行的问题，提供原生的 Waitress 或 Eventlet 方案
-    # 但最简单的是直接利用 app.run 或 socketio.run 运行在生产环境（这里用 socketio.run 启动）
-    socketio.run(app, host='0.0.0.0', port=5000)
+    if getattr(sys, 'frozen', False):
+        try:
+            import webview
+            # 降低控制台输出
+            log = logging.getLogger('werkzeug')
+            log.setLevel(logging.ERROR)
+            
+            def start_server():
+                socketio.run(app, host='127.0.0.1', port=5000)
+
+            # 在后台线程运行 Flask 服务器
+            threading.Thread(target=start_server, daemon=True).start()
+            
+            # 创建原生系统窗口，加载本地地址
+            webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800)
+            webview.start()
+            
+            # 窗口关闭后，退出整个软件进程
+            os._exit(0)
+        except ImportError:
+            # 兜底：如果没装上 pywebview，就直接打开浏览器
+            import webbrowser
+            threading.Timer(1.5, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
+            socketio.run(app, host='127.0.0.1', port=5000)
+    else:
+        socketio.run(app, host='0.0.0.0', port=5000)

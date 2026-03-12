@@ -3,6 +3,9 @@ name: Build Windows EXE
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
   release:
     types: [published]
 
