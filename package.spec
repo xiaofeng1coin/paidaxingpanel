@@ -19,7 +19,12 @@ a = Analysis(
         'flask_login',
         'flask_socketio',
         'apscheduler',
-        'webview'
+        'webview',
+        'webview.platforms.edgechromium',
+        'webview.platforms.edgehtml',
+        'webview.platforms.winforms',
+        'pystray',
+        'PIL._tkinter_finder'
     ],
     hookspath=[],
     hooksconfig={},
@@ -46,7 +51,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

@@ -4,3 +4,6 @@ APScheduler==3.10.4
 Flask-Login==0.6.3
 Flask-SocketIO==5.3.6
 Werkzeug==3.1.6
+pywebview==5.0.5
+pystray==0.19.5
+Pillow==10.3.0

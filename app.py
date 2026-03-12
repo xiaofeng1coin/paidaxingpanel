@@ -2075,28 +2075,50 @@ if len(sys.argv) > 1:
     
 if __name__ == '__main__':
     if getattr(sys, 'frozen', False):
-        try:
-            import webview
-            # 降低控制台输出
-            log = logging.getLogger('werkzeug')
-            log.setLevel(logging.ERROR)
-            
-            def start_server():
-                socketio.run(app, host='127.0.0.1', port=5000)
-
-            # 在后台线程运行 Flask 服务器
-            threading.Thread(target=start_server, daemon=True).start()
-            
-            # 创建原生系统窗口，加载本地地址
-            webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800)
-            webview.start()
-            
-            # 窗口关闭后，退出整个软件进程
-            os._exit(0)
-        except ImportError:
-            # 兜底：如果没装上 pywebview，就直接打开浏览器
-            import webbrowser
-            threading.Timer(1.5, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
-            socketio.run(app, host='127.0.0.1', port=5000)
+        import webview
+        from pystray import Icon, Menu, MenuItem
+        from PIL import Image, ImageDraw
+        
+        # 静默 Flask 的终端日志输出
+        log = logging.getLogger('werkzeug')
+        log.setLevel(logging.ERROR)
+        
+        def start_server():
+            socketio.run(app, host='127.0.0.1', port=5000, allow_unsafe_werkzeug=True)
+        # 后台静默启动本地服务器
+        threading.Thread(target=start_server, daemon=True).start()
+        
+        # 创建前端窗口
+        window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800)
+        # 1. 拦截窗口关闭事件：不退出，而是隐藏窗口
+        def on_closing():
+            window.hide()
+            return False  # 返回 False 阻止窗口被真正销毁
+        window.events.closing += on_closing
+        # 2. 定义托盘菜单的操作
+        def show_window(icon, item):
+            window.show()
+        def exit_app(icon, item):
+            icon.stop()        # 停止托盘
+            window.destroy()   # 强制销毁窗口
+            os._exit(0)        # 彻底杀死所有后台线程
+        # 3. 动态绘制一个简单的托盘图标 (蓝底白方块)，避免打包 ico 找不到路径的问题
+        def create_tray_icon():
+            image = Image.new('RGB', (64, 64), color=(37, 99, 235))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((16, 16, 48, 48), fill="white")
+            return image
+        # 4. 初始化右下角系统托盘
+        tray_menu = Menu(
+            MenuItem("显示面板", show_window, default=True),
+            MenuItem("彻底退出", exit_app)
+        )
+        tray_icon = Icon("PatrickPanel", create_tray_icon(), "派大星面板", menu=tray_menu)
+        # 在独立线程运行托盘，防止阻塞主窗口渲染
+        threading.Thread(target=tray_icon.run, daemon=True).start()
+        
+        # 前台拉起软件界面 (阻塞主线程)
+        webview.start()
     else:
+        # 正常 Docker 环境保持原样
         socketio.run(app, host='0.0.0.0', port=5000)
