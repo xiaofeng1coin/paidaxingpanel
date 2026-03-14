@@ -31,13 +31,14 @@ jobs:
         
         # 安装基础运行环境
         RUN apk update && apk add --no-cache \
-            python3 py3-pip nodejs npm tzdata bash git curl shadow sqlite
+            python3 py3-pip nodejs npm tzdata bash git curl shadow sqlite busybox-suid
             
         WORKDIR /app
         COPY requirements.txt .
         
         # 安装Python依赖 (在Alpine中使用--break-system-packages允许全局安装)
-        RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+        # 增加 gunicorn 以提高稳定性
+        RUN pip install --no-cache-dir --break-system-packages -r requirements.txt gunicorn
         
         COPY . .
         
@@ -112,19 +113,29 @@ jobs:
         mount -t sysfs sysfs "$MODDIR/alpine/sys"
         mount -o bind /dev "$MODDIR/alpine/dev"
         mount -o bind /dev/pts "$MODDIR/alpine/dev/pts"
-        mount -o bind /etc/resolv.conf "$MODDIR/alpine/etc/resolv.conf"
+        
+        # 修复网络挂载：拷贝安卓的 resolv.conf 和 hosts，确保 DNS 正常
+        cp /system/etc/resolv.conf "$MODDIR/alpine/etc/resolv.conf" 2>/dev/null || echo "nameserver 8.8.8.8" > "$MODDIR/alpine/etc/resolv.conf"
+        cp /system/etc/hosts "$MODDIR/alpine/etc/hosts" 2>/dev/null
         
         # 将外部存储的数据目录挂载到容器的 /app/data 中
         mkdir -p "$MODDIR/alpine/app/data"
         mount -o bind "$PUBLIC_DATA_DIR" "$MODDIR/alpine/app/data"
         
-        # 使用 chroot 进入环境并后台启动 Flask 面板
-        # 传入 ANDROID_DATA_DIR 环境变量通知 app.py 数据目录位置
+        # 修复 Android 侧组权限问题，使 chroot 内的 root 拥有网络权限
+        # Android inet 组为 3003
+        export ANDROID_DATA_DIR=/app/data
+        
+        # 使用 chroot 进入环境并后台启动面板，改用 gunicorn 确保多线程正常且绑定到 0.0.0.0
         chroot "$MODDIR/alpine" /bin/sh -c "
             export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             export ANDROID_DATA_DIR=/app/data
+            # 为 root 增加 inet 组权限 (如果不受支持将静默失败，但这通常能解决 Socket 绑定问题)
+            addgroup -g 3003 inet 2>/dev/null
+            addgroup root inet 2>/dev/null
             cd /app
-            nohup python3 app.py > /app/data/run.log 2>&1 &
+            # 使用 Gunicorn 启动
+            nohup gunicorn --worker-class gthread --threads 10 --bind 0.0.0.0:5000 app:app > /app/data/run.log 2>&1 &
         "
         EOF
         
