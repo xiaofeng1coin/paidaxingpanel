@@ -1,4 +1,4 @@
-name: Build Android Magisk Module
+name: Build Magisk Module
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  build-magisk:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,121 +18,129 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up QEMU for ARM64
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y qemu-user-static rsync zip
+      uses: docker/setup-qemu-action@v3
 
-    - name: Download and Prepare Alpine Rootfs
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Prepare Dockerfile for Android Alpine Rootfs
       run: |
-        mkdir -p magisk-module/alpine
-        # 下载官方稳定的 Alpine Linux ARM64 精简包
-        wget https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz
-        tar -xvf alpine-minirootfs-3.19.1-aarch64.tar.gz -C magisk-module/alpine
+        cat << 'EOF' > Dockerfile.magisk
+        FROM arm64v8/alpine:3.19
+        ENV TZ=Asia/Shanghai
         
-        # 复制 QEMU 以支持在 x86 机器上 chroot 到 arm64 系统
-        sudo cp /usr/bin/qemu-aarch64-static magisk-module/alpine/usr/bin/
-
-        # 设置 DNS
-        sudo cp /etc/resolv.conf magisk-module/alpine/etc/resolv.conf
-
-        # 写入并执行依赖安装脚本 (Python, Nodejs等)
-        cat << 'EOF' > magisk-module/alpine/install.sh
-        #!/bin/sh
-        apk update
-        apk add --no-cache python3 py3-pip nodejs npm git tzdata curl bash gcc g++ make linux-headers python3-dev musl-dev libffi-dev
-        EOF
-        sudo chroot magisk-module/alpine /bin/sh /install.sh
-
-    - name: Copy Application Files
-      run: |
-        sudo mkdir -p magisk-module/alpine/opt/PatrickPanel
+        # 安装基础运行环境
+        RUN apk update && apk add --no-cache \
+            python3 py3-pip nodejs npm tzdata bash git curl shadow sqlite
+            
+        WORKDIR /app
+        COPY requirements.txt .
         
-        # 将项目源码完整复制到容器内，排除无用文件
-        sudo rsync -av --exclude='magisk-module' --exclude='alpine-minirootfs*' --exclude='.git' ./ magisk-module/alpine/opt/PatrickPanel/
-
-        # 在 ARM64 容器内安装 Python pip 依赖
-        cat << 'EOF' > magisk-module/alpine/install_pip.sh
-        #!/bin/sh
-        cd /opt/PatrickPanel
-        pip install --no-cache-dir -r requirements.txt gunicorn --break-system-packages
+        # 安装Python依赖 (在Alpine中使用--break-system-packages允许全局安装)
+        RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+        
+        COPY . .
+        
+        # 清理不必要的文件以减小体积
+        RUN rm -rf /var/cache/apk/* && \
+            rm -rf /root/.cache
         EOF
-        sudo chroot magisk-module/alpine /bin/sh /install_pip.sh
 
-        # 清理临时文件，减小最终包体积
-        sudo rm -f magisk-module/alpine/install.sh magisk-module/alpine/install_pip.sh
-        sudo rm -f magisk-module/alpine/usr/bin/qemu-aarch64-static
-        sudo rm -f alpine-minirootfs-3.19.1-aarch64.tar.gz
-
-    - name: Create Magisk Scripts
+    - name: Build and Export Rootfs
       run: |
-        # 模块元数据
-        cat << 'EOF' > magisk-module/module.prop
-        id=patrickpanel
+        # 构建适用于安卓设备的 arm64 架构镜像
+        docker buildx build --platform linux/arm64 -t patrickpanel-arm64 -f Dockerfile.magisk --load .
+        
+        # 创建一个临时容器并导出其纯净的文件系统
+        docker create --name temp-container patrickpanel-arm64
+        docker export temp-container -o rootfs.tar
+        docker rm temp-container
+        
+        # 使用 xz 进行极限压缩，大幅度减小面具模块体积
+        xz -z -9 -T0 rootfs.tar
+
+    - name: Create Magisk Module Structure
+      run: |
+        mkdir magisk_module
+        cd magisk_module
+        
+        # 1. 移动根文件系统
+        mv ../rootfs.tar.xz ./
+        
+        # 2. 创建 module.prop
+        cat << 'EOF' > module.prop
+        id=patrick_panel
         name=派大星面板 (PatrickPanel)
         version=v1.0.7
         versionCode=107
         author=xiaofeng1coin
-        description=支持 Python/Node/Shell 的现代化面板。内置独立 Alpine 环境。数据存储在内部存储 /PatrickPanelData。启动后访问 http://127.0.0.1:5000
+        description=支持Python3/Nodejs的定时任务面板。Data目录位于内部存储根目录下的 PatrickPanel_Data 文件夹。
         EOF
-
-        # 模块安装脚本
-        cat << 'EOF' > magisk-module/customize.sh
-        ui_print "- 正在安装 派大星面板 (Alpine ARM64)"
-        ui_print "- 面板将以后台独立服务运行"
-        ui_print "- 数据将自动存放至手机根目录 /PatrickPanelData"
-        set_perm_recursive $MODPATH 0 0 0755 0755
+        
+        # 3. 创建 customize.sh (面具安装脚本)
+        cat << 'EOF' > customize.sh
+        #!/system/bin/sh
+        SKIPUNZIP=0
+        
+        ui_print "- 正在解压 Alpine Linux 核心环境 (此过程可能需要1-3分钟，请耐心等待)..."
+        mkdir -p $MODPATH/alpine
+        tar -xf $MODPATH/rootfs.tar.xz -C $MODPATH/alpine
+        rm $MODPATH/rootfs.tar.xz
+        
+        ui_print "- 核心环境解压完成！"
+        ui_print "- 面板数据将安全保存在: /storage/emulated/0/PatrickPanel_Data"
+        ui_print "- 重启手机后，浏览器访问 http://127.0.0.1:5000 即可使用"
         EOF
-
-        # 面具自启脚本后台运行
-        cat << 'EOF' > magisk-module/service.sh
+        
+        # 4. 创建 service.sh (开机自启与后台运行脚本)
+        cat << 'EOF' > service.sh
         #!/system/bin/sh
         MODDIR=${0%/*}
-
-        # 等待系统开机挂载内部存储
-        until [ -d "/storage/emulated/0/Android" ]; do
+        
+        # 等待安卓系统完全启动，确保外部存储已挂载
+        until [ $(getprop sys.boot_completed) -eq 1 ]; do
             sleep 2
         done
-
-        # 在手机内部存储(普通文件管理器可见)创建数据目录
-        EXT_DATA="/storage/emulated/0/PatrickPanelData"
-        mkdir -p $EXT_DATA
-
-        # 挂载 Linux 伪文件系统供 chroot 正常运行
-        mount -o bind /dev $MODDIR/alpine/dev
-        mount -o bind /proc $MODDIR/alpine/proc
-        mount -o bind /sys $MODDIR/alpine/sys
-
-        # 将手机内置存储挂载到容器内
-        mkdir -p $MODDIR/alpine/sdcard
-        mount -o bind /storage/emulated/0 $MODDIR/alpine/sdcard
-
-        # 进入容器环境，定义环境变量并后台启动面板
-        chroot $MODDIR/alpine /bin/sh -c "
-            export PATH=/usr/bin:/usr/sbin:/bin:/sbin
-            export HOME=/root
-            export PDX_DATA_DIR=/sdcard/PatrickPanelData
-            cd /opt/PatrickPanel
-            nohup gunicorn --worker-class gthread --threads 10 --bind 0.0.0.0:5000 --log-level info app:app > /sdcard/PatrickPanelData/boot.log 2>&1 &
+        sleep 10
+        
+        # 定义并创建外部可见的公共数据目录
+        PUBLIC_DATA_DIR="/storage/emulated/0/PatrickPanel_Data"
+        mkdir -p "$PUBLIC_DATA_DIR"
+        
+        # 挂载必要的内核虚拟文件系统到 chroot 容器内部
+        mount -t proc proc "$MODDIR/alpine/proc"
+        mount -t sysfs sysfs "$MODDIR/alpine/sys"
+        mount -o bind /dev "$MODDIR/alpine/dev"
+        mount -o bind /dev/pts "$MODDIR/alpine/dev/pts"
+        mount -o bind /etc/resolv.conf "$MODDIR/alpine/etc/resolv.conf"
+        
+        # 将外部存储的数据目录挂载到容器的 /app/data 中
+        mkdir -p "$MODDIR/alpine/app/data"
+        mount -o bind "$PUBLIC_DATA_DIR" "$MODDIR/alpine/app/data"
+        
+        # 使用 chroot 进入环境并后台启动 Flask 面板
+        # 传入 ANDROID_DATA_DIR 环境变量通知 app.py 数据目录位置
+        chroot "$MODDIR/alpine" /bin/sh -c "
+            export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            export ANDROID_DATA_DIR=/app/data
+            cd /app
+            nohup python3 app.py > /app/data/run.log 2>&1 &
         "
         EOF
-        chmod +x magisk-module/service.sh
+        
+        # 赋予执行权限
+        chmod +x customize.sh service.sh
 
-    - name: Get Version from version.json
-      id: get_version
+    - name: Zip Magisk Module
       run: |
-        VERSION=$(grep '"version"' version.json | cut -d'"' -f4)
-        echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-
-    - name: Package Magisk Module
-      run: |
-        cd magisk-module
-        zip -r9 ../PatrickPanel-Magisk-v${{ env.APP_VERSION }}.zip .
+        cd magisk_module
+        zip -r9 ../PatrickPanel-Magisk-v1.0.7.zip .
 
     - name: Publish to Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v${{ env.APP_VERSION }}-magisk
-        name: 派大星面板 Android Magisk 模块 v${{ env.APP_VERSION }}
-        files: PatrickPanel-Magisk-v${{ env.APP_VERSION }}.zip
+        tag_name: Magisk-v1.0.7
+        name: 派大星面板 面具模块 v1.0.7
+        files: PatrickPanel-Magisk-v1.0.7.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
