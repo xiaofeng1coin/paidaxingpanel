@@ -2092,8 +2092,22 @@ if __name__ == '__main__':
         # 静默 Flask 的终端日志输出
         log = logging.getLogger('werkzeug')
         log.setLevel(logging.ERROR)
+
+        # --- 新增：写入本地 PC 调试日志 ---
+        pc_log_path = os.path.join(DATA_DIR, 'pc_debug.log')
+        pc_file_handler = logging.FileHandler(pc_log_path, encoding='utf-8')
+        pc_file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(name)s: %(message)s'))
+        logging.getLogger().addHandler(pc_file_handler)
+        logging.getLogger().setLevel(logging.DEBUG)
+        
+        wv_log = logging.getLogger('pywebview')
+        wv_log.setLevel(logging.DEBUG)
+        wv_log.addHandler(pc_file_handler)
+        logging.debug("系统已启动，日志模块初始化完成")
+        # ---------------------------------
         
         def start_server():
+            logging.debug("正在启动本地 Flask 服务器...")
             socketio.run(app, host='127.0.0.1', port=5000, allow_unsafe_werkzeug=True)
 
         # 后台静默启动本地服务器
@@ -2103,15 +2117,26 @@ if __name__ == '__main__':
         window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800, text_select=True)
 
         def on_closing():
-            window.hide()
+            logging.debug("触发 on_closing 事件: 用户点击了右上角关闭按钮")
+            # 解决卡死：通过异步线程执行 hide，避免阻塞当前主线程 UI 消息循环
+            def _async_hide():
+                try:
+                    logging.debug("正在尝试隐藏窗口...")
+                    window.hide()
+                    logging.debug("窗口隐藏成功")
+                except Exception as e:
+                    logging.error(f"窗口隐藏失败: {traceback.format_exc()}")
+            threading.Thread(target=_async_hide, daemon=True).start()
             return False
 
         window.events.closing += on_closing
 
         def show_window(icon, item):
+            logging.debug("触发托盘菜单: 显示面板")
             window.show()
 
         def exit_app(icon, item):
+            logging.debug("触发托盘菜单: 彻底退出，准备强制杀停进程")
             icon.stop()
             # 3. 解决退出卡死：不再调用 window.destroy() 等待主线程，直接使用底层的退出指令强杀自己
             os._exit(0)
@@ -2132,7 +2157,8 @@ if __name__ == '__main__':
         threading.Thread(target=tray_icon.run, daemon=True).start()
         
         # 前台拉起软件界面
-        webview.start()
+        logging.debug("拉起 webview 主窗口...")
+        webview.start(debug=True)
     else:
         # 正常 Docker 环境保持原样
         socketio.run(app, host='0.0.0.0', port=5000)
