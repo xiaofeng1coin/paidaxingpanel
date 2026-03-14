@@ -51,13 +51,16 @@ aps_logger.setLevel(logging.DEBUG)
 
 from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog, Subscription
 
-# 核心修改：兼容 PyInstaller exe 环境与 Docker/源码环境
+# 核心修改：兼容 PyInstaller exe 环境与 Docker/源码环境，以及安卓 Magisk 外部存储支持
 if getattr(sys, 'frozen', False):
     BASE_DIR = sys._MEIPASS
     DATA_DIR = os.path.join(os.path.dirname(sys.executable), 'data')
 else:
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-    DATA_DIR = os.path.join(BASE_DIR, 'data')
+    if os.environ.get('ANDROID_DATA_DIR'):
+        DATA_DIR = os.environ.get('ANDROID_DATA_DIR')
+    else:
+        DATA_DIR = os.path.join(BASE_DIR, 'data')
 
 SCRIPTS_DIR = os.path.join(DATA_DIR, 'scripts')
 LOGS_DIR = os.path.join(DATA_DIR, 'logs')
@@ -2160,5 +2163,5 @@ if __name__ == '__main__':
         logging.debug("拉起 webview 主窗口...")
         webview.start()
     else:
-        # 正常 Docker 环境保持原样
+        # 正常 Docker/Magisk 环境保持原样
         socketio.run(app, host='0.0.0.0', port=5000)

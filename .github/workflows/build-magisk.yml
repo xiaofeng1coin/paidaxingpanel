@@ -1,0 +1,165 @@
+name: Build Android Magisk Module
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  build-magisk:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Prepare QEMU and dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-user-static xz-utils
+
+    - name: Build Alpine aarch64 RootFS
+      run: |
+        mkdir rootfs
+        cd rootfs
+        # 拉取轻量化基于 musl 的 Alpine ARM64 镜像
+        wget https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz
+        tar -xf alpine-minirootfs-3.19.1-aarch64.tar.gz
+        rm alpine-minirootfs-3.19.1-aarch64.tar.gz
+        
+        # 注入 QEMU 执行解释器，以便可以在 x86 主机上构建 aarch64
+        cp /usr/bin/qemu-aarch64-static usr/bin/
+        cp /etc/resolv.conf etc/
+        
+        # 写入软件源
+        echo "http://dl-cdn.alpinelinux.org/alpine/v3.19/main" > etc/apk/repositories
+        echo "http://dl-cdn.alpinelinux.org/alpine/v3.19/community" >> etc/apk/repositories
+        
+        # 进入沙盒容器内安装完整的 Python3 和 NodeJS 环境
+        sudo chroot . /bin/sh -c "apk update && apk add --no-cache python3 py3-pip nodejs npm git tzdata curl bash gcc musl-dev python3-dev linux-headers make"
+        
+        mkdir -p opt/PatrickPanel
+        cd ..
+        
+        # 将项目主文件搬入容器对应目录
+        cp -r app.py database.py requirements.txt templates static version.json ql.js sendNotify.js rootfs/opt/PatrickPanel/
+        
+        # 进入沙盒容器内部执行 pip 包安装
+        cd rootfs
+        sudo chroot . /bin/sh -c "cd /opt/PatrickPanel && pip install --break-system-packages -r requirements.txt gunicorn"
+        
+        # 安装完毕清理不必要的构建缓存和 QEMU
+        rm usr/bin/qemu-aarch64-static
+        sudo chroot . /bin/sh -c "apk cache clean && rm -rf /root/.cache"
+        cd ..
+        
+        # 用最高压缩比打包为 xz (可节省大量手机存储和流量)
+        echo "Compressing RootFS, this might take a while..."
+        XZ_OPT=-9 tar -cJf rootfs.tar.xz -C rootfs .
+
+    - name: Create Magisk Module Zip
+      run: |
+        mkdir magisk_module
+        cd magisk_module
+        
+        # 遵循标准 Magisk 模块文件夹架构
+        mkdir -p META-INF/com/google/android
+        echo "#MAGISK" > META-INF/com/google/android/update-binary
+        echo "dummy" > META-INF/com/google/android/updater-script
+        
+        cat > module.prop << 'EOF'
+        id=patrick_panel
+        name=派大星面板 (Patrick Panel)
+        version=v1.0.7
+        versionCode=107
+        author=AutoBuild
+        description=支持 Python/JS/Shell 的后台定时任务面板。完全隔离的 Linux 容器运行，端口 5000。数据存放在内置存储 /sdcard/PatrickPanelData，普通应用即可直接查看和修改脚本数据。
+        EOF
+        
+        cat > customize.sh << 'EOF'
+        SKIPUNZIP=1
+        ui_print "- 正在安装 派大星面板 运行环境..."
+        ui_print "- 释放文件..."
+        unzip -o "$ZIPFILE" -x "META-INF/*" -d $MODPATH >&2
+        ui_print "- 正在解压完整 Linux 运行环境"
+        ui_print "- (由于环境包含 Python/Node 依赖，请耐心等待 1-2 分钟)..."
+        cd $MODPATH
+        tar -xf rootfs.tar.xz
+        rm rootfs.tar.xz
+        ui_print "- 设置权限..."
+        set_perm_recursive $MODPATH 0 0 0755 0755
+        ui_print "- 安装完成！"
+        ui_print "- 系统重启后，程序将自动挂载到后台。"
+        ui_print "- 请使用浏览器访问 http://您的手机IP:5000"
+        ui_print "- 数据保存在内部存储根目录: /sdcard/PatrickPanelData"
+        EOF
+        
+        cat > service.sh << 'EOF'
+        #!/system/bin/sh
+        MODDIR=${0%/*}
+        
+        # 等待安卓系统启动完成和 SD 卡挂载完毕
+        until [ $(getprop sys.boot_completed) -eq 1 ]; do sleep 2; done
+        until [ -d "/storage/emulated/0" ]; do sleep 2; done
+        
+        # 数据目录建立在普通用户可见的内部存储 (普通文件管理器可见)
+        EXT_DATA="/storage/emulated/0/PatrickPanelData"
+        mkdir -p $EXT_DATA
+        
+        # 挂载必备的安卓底层文件系统到容器内
+        ROOTFS="$MODDIR/rootfs"
+        mkdir -p $ROOTFS
+        
+        mount -t proc proc "$ROOTFS/proc"
+        mount -t sysfs sysfs "$ROOTFS/sys"
+        mount -o bind /dev "$ROOTFS/dev"
+        mount -o bind /dev/pts "$ROOTFS/dev/pts"
+        
+        # 将手机的内部存储(SD卡)映射进 Linux 沙盒
+        mkdir -p "$ROOTFS/sdcard"
+        mount -o bind /storage/emulated/0 "$ROOTFS/sdcard"
+        
+        # 注入公共 DNS 解析，防止安卓 DNS 解析穿透失败
+        echo "nameserver 8.8.8.8" > "$ROOTFS/etc/resolv.conf"
+        echo "nameserver 114.114.114.114" >> "$ROOTFS/etc/resolv.conf"
+        
+        # 在容器内部执行的核心启动指令
+        cat > "$ROOTFS/start.sh" << 'INNER_EOF'
+        #!/bin/sh
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        export TZ=Asia/Shanghai
+        # 【关键参数】通知 Python 挂载安卓系统外部存储为数据目录
+        export ANDROID_DATA_DIR=/sdcard/PatrickPanelData
+        cd /opt/PatrickPanel
+        # 守护进程静默拉起
+        nohup gunicorn --worker-class gthread --threads 10 --bind 0.0.0.0:5000 app:app > /sdcard/PatrickPanelData/system_run.log 2>&1 &
+        INNER_EOF
+        
+        chmod +x "$ROOTFS/start.sh"
+        
+        # 切换沙盒根目录并触发执行
+        chroot "$ROOTFS" /start.sh
+        EOF
+        
+        mv ../rootfs.tar.xz ./
+        zip -r9 ../PatrickPanel-Magisk-Module.zip .
+
+    - name: Get Version from version.json
+      id: get_version
+      run: |
+        VERSION=$(grep -oP '"version": "\K[^"]+' version.json)
+        echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Publish to Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ env.APP_VERSION }}
+        name: 派大星面板 v${{ env.APP_VERSION }}
+        files: PatrickPanel-Magisk-Module.zip
+        append_body: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
