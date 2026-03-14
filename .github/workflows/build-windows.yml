@@ -7,6 +7,10 @@ on:
     branches:
       - master
 
+# 修复：显式声明操作仓库内容(创建 Release)的写入权限
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
