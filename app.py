@@ -2156,9 +2156,9 @@ if __name__ == '__main__':
         # 在独立线程运行托盘
         threading.Thread(target=tray_icon.run, daemon=True).start()
         
-        # 前台拉起软件界面
+        # 前台拉起软件界面 (已取消强制调试窗口)
         logging.debug("拉起 webview 主窗口...")
-        webview.start(debug=True)
+        webview.start()
     else:
         # 正常 Docker 环境保持原样
         socketio.run(app, host='0.0.0.0', port=5000)

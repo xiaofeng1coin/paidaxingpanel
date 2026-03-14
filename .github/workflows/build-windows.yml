@@ -6,8 +6,6 @@ on:
   push:
     branches:
       - master
-  release:
-    types: [published]
 
 jobs:
   build:
@@ -32,16 +30,18 @@ jobs:
       run: |
         pyinstaller package.spec
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: PatrickPanel-Windows
-        path: dist/PatrickPanel.exe
+    - name: Get Version from version.json
+      id: get_version
+      run: |
+        $json = Get-Content version.json | ConvertFrom-Json
+        $version = $json.version
+        echo "APP_VERSION=$version" >> $env:GITHUB_ENV
 
-    - name: Upload to Release
-      if: github.event_name == 'release'
+    - name: Publish to Release
       uses: softprops/action-gh-release@v2
       with:
+        tag_name: v${{ env.APP_VERSION }}
+        name: 派大星面板 v${{ env.APP_VERSION }}
         files: dist/PatrickPanel.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
