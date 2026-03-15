@@ -1,13 +1,252 @@
 /* mobile_install.css */
-body { background: var(--bg); display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-.app-header { display: none !important; }
+/* 强制隐藏 Base 模板中可能遗留的导航栏和吐司 */
+.app-header, .top-scroll-nav, .toast-container { display: none !important; }
 
-.login-box { background: var(--surface); width: 90%; max-width: 400px; padding: 40px 30px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 4px 20px rgba(0,0,0,0.03); }
-.auth-title { font-size: 20px; font-weight: 800; color: var(--text-main); margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
-.auth-subtitle { font-size: 13px; color: var(--text-sub); margin-bottom: 24px; }
+body {
+    background-color: #ffffff;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden; /* 防止因为内部绝对定位产生页面抖动 */
+}
 
-.tech-input { width: 100%; background: var(--bg); border: 1px solid var(--border); padding: 14px 16px; border-radius: 8px; font-size: 15px; margin-bottom: 16px; outline: none; transition: 0.2s; font-family: monospace; }
-.tech-input:focus { border-color: var(--text-main); box-shadow: 0 0 0 2px rgba(17, 24, 39, 0.1); }
+.onboard-wrapper {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
 
-.btn-submit { background: var(--text-main); color: #fff; width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
-.btn-submit:active { transform: scale(0.98); background: #374151; }
+/* 顶部原生无感进度条 */
+.onboard-progress {
+    position: absolute;
+    top: env(safe-area-inset-top, 0px); /* 适配刘海屏 */
+    left: 20px;
+    right: 20px;
+    height: 4px;
+    background: #f1f5f9;
+    border-radius: 4px;
+    margin-top: 20px;
+    overflow: hidden;
+    z-index: 10;
+}
+.progress-indicator {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+    border-radius: 4px;
+    transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 滑动容器与各步骤视图 */
+.onboard-slider {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+.onboard-step {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    transition: transform 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+    visibility: hidden;
+}
+
+/* 定义左右滑动位置 */
+.onboard-step.active {
+    transform: translateX(0);
+    visibility: visible;
+}
+.onboard-step.right {
+    transform: translateX(100%);
+    visibility: visible;
+}
+.onboard-step.left {
+    transform: translateX(-100%);
+    visibility: visible;
+}
+
+/* 居中排版（用于第一页和最后一页） */
+.step-content-center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 32px;
+}
+
+/* 靠上排版（用于表单页） */
+.step-content-top {
+    flex: 1;
+    padding: 80px 32px 20px; /* 留出顶部进度条空间 */
+    overflow-y: auto; /* 内容过多时允许滑动，防止挡住底部按钮 */
+}
+
+/* 大标题与图标设计 */
+.hero-icon-box {
+    width: 88px;
+    height: 88px;
+    border-radius: 28px;
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 12px 24px rgba(16, 185, 129, 0.25);
+}
+.hero-icon { font-size: 40px; }
+.hero-title { font-size: 32px; font-weight: 800; color: #111827; margin: 0; letter-spacing: -0.5px; }
+.hero-subtitle { font-size: 16px; color: #6b7280; line-height: 1.6; margin-top: 16px; }
+
+.success-ring {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: #10b981;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 16px rgba(16, 185, 129, 0.1);
+}
+
+.step-title { font-size: 26px; font-weight: 800; color: #111827; margin-bottom: 8px; }
+.step-desc { font-size: 15px; color: #6b7280; }
+
+/* 现代移动端表单设计 */
+.form-group { margin-bottom: 24px; }
+.form-label { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 8px; display: block; }
+
+.app-input {
+    width: 100%;
+    height: 56px;
+    background: #f8fafc;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    padding: 0 20px;
+    font-size: 16px;
+    color: #111827;
+    transition: all 0.2s;
+    outline: none;
+    box-sizing: border-box;
+}
+.app-input::placeholder { color: #9ca3af; font-weight: 400; }
+.app-input:focus {
+    background: #ffffff;
+    border-color: #3b82f6;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
+}
+
+.app-input-wrapper { position: relative; }
+.pr-icon { padding-right: 50px; }
+.pwd-toggle {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 20px;
+    color: #9ca3af;
+    padding: 4px;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.app-select-wrapper { position: relative; }
+.app-select {
+    width: 100%;
+    height: 56px;
+    background: #f8fafc;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    padding: 0 20px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #111827;
+    appearance: none;
+    outline: none;
+    box-sizing: border-box;
+}
+.app-select:focus { border-color: #3b82f6; background: #ffffff; }
+.select-icon {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #6b7280;
+    pointer-events: none;
+}
+
+.notify-params-box {
+    background: #f8fafc;
+    border-radius: 16px;
+    padding: 20px;
+    margin-top: 16px;
+    border: 1px dashed #cbd5e1;
+}
+.param-input { height: 50px; border: 1px solid #e2e8f0; background: #ffffff; border-radius: 12px; }
+
+/* 底部操作区 (适配全面屏下巴) */
+.bottom-action {
+    padding: 16px 32px calc(24px + env(safe-area-inset-bottom, 0px));
+    background: #ffffff;
+}
+.double-btn {
+    display: flex;
+    gap: 16px;
+}
+
+.btn-primary-huge {
+    flex: 1;
+    height: 56px;
+    background: #111827;
+    color: #ffffff;
+    border: none;
+    border-radius: 28px;
+    font-size: 17px;
+    font-weight: 600;
+    transition: transform 0.1s;
+}
+.btn-primary-huge:active { transform: scale(0.96); }
+.btn-primary-huge:disabled { background: #9ca3af; }
+
+.btn-secondary-huge {
+    flex: 1;
+    height: 56px;
+    background: #f1f5f9;
+    color: #374151;
+    border: none;
+    border-radius: 28px;
+    font-size: 17px;
+    font-weight: 600;
+    transition: transform 0.1s;
+}
+.btn-secondary-huge:active { transform: scale(0.96); background: #e2e8f0; }
+
+/* 移动端自定义 Toast 提示 */
+.app-toast {
+    position: fixed;
+    top: calc(50px + env(safe-area-inset-top, 0px));
+    left: 50%;
+    transform: translate(-50%, -20px);
+    background: rgba(17, 24, 39, 0.9);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 100px;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 9999;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+    white-space: nowrap;
+}
+.app-toast.show {
+    transform: translate(-50%, 0);
+    opacity: 1;
+    visibility: visible;
+}

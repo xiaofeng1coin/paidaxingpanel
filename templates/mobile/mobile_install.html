@@ -1,20 +1,264 @@
 <!-- mobile_install.html -->
 {% extends 'mobile/mobile_base.html' %}
-{% block title %}{% endblock %}
+{% block title %}配置向导{% endblock %}
 
 {% block styles %}
 <link href="{{ url_for('static', filename='css/mobile/mobile_install.css') }}" rel="stylesheet">
 {% endblock %}
 
 {% block content %}
-<div class="login-box">
-    <div class="auth-title"><i class="bi bi-hdd-network text-primary"></i> 部署系统</div>
-    <div class="auth-subtitle">首次运行，请设置管理员凭证</div>
-    
-    <form method="POST" action="/install">
-        <input type="text" name="username" class="tech-input" placeholder="设置管理员账号" required autocomplete="off">
-        <input type="password" name="password" class="tech-input" placeholder="设置管理员密码" required autocomplete="new-password">
-        <button type="submit" class="btn-submit mt-2">开 始 部 署</button>
-    </form>
+<div class="onboard-wrapper">
+    <!-- 顶部轻量级进度条 -->
+    <div class="onboard-progress">
+        <div class="progress-indicator" id="progressIndicator" style="width: 25%;"></div>
+    </div>
+
+    <!-- 视图滑动容器 -->
+    <div class="onboard-slider" id="onboardSlider">
+
+        <!-- 步骤 1：欢迎 -->
+        <div class="onboard-step active" id="step-1">
+            <div class="step-content-center text-center">
+                <div class="hero-icon-box mb-4 mx-auto">
+                    <i class="bi bi-star-fill text-white hero-icon"></i>
+                </div>
+                <h2 class="hero-title">欢迎使用</h2>
+                <h2 class="hero-title mb-3">派大星面板</h2>
+                <p class="hero-subtitle">支持 Python / JS / Shell 的<br>现代化移动端定时任务面板</p>
+            </div>
+            <div class="bottom-action">
+                <button class="btn-primary-huge" onclick="goToStep(1, 2)">开始配置</button>
+            </div>
+        </div>
+
+        <!-- 步骤 2：账号密码 -->
+        <div class="onboard-step right" id="step-2">
+            <div class="step-content-top">
+                <h3 class="step-title">设置管理员凭证</h3>
+                <p class="step-desc">请妥善保管您的登录账号与密码</p>
+
+                <div class="form-group mt-5">
+                    <label class="form-label">管理员账号</label>
+                    <input type="text" id="reg_username" class="app-input" placeholder="输入用户名" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">管理员密码</label>
+                    <div class="app-input-wrapper">
+                        <input type="password" id="reg_pwd1" class="app-input pr-icon" placeholder="输入密码" required>
+                        <i class="bi bi-eye-slash pwd-toggle" onclick="togglePwd('reg_pwd1', this)"></i>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">确认密码</label>
+                    <div class="app-input-wrapper">
+                        <input type="password" id="reg_pwd2" class="app-input pr-icon" placeholder="再次输入密码" required>
+                        <i class="bi bi-eye-slash pwd-toggle" onclick="togglePwd('reg_pwd2', this)"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="bottom-action double-btn">
+                <button class="btn-secondary-huge" onclick="goToStep(2, 1)">返回</button>
+                <button class="btn-primary-huge" onclick="validateStep2()">下一步</button>
+            </div>
+        </div>
+
+        <!-- 步骤 3：通知设置 -->
+        <div class="onboard-step right" id="step-3">
+            <div class="step-content-top">
+                <h3 class="step-title">消息推送配置</h3>
+                <p class="step-desc">任务执行结果将通过此渠道发送给您</p>
+
+                <div class="form-group mt-5">
+                    <label class="form-label">选择推送方式</label>
+                    <div class="app-select-wrapper">
+                        <select id="notify_type" class="app-select" onchange="handleNotifyChange()">
+                            <option value="none">暂不配置 (跳过)</option>
+                            <option value="telegram">Telegram</option>
+                            <option value="dingtalk">钉钉机器人</option>
+                            <option value="pushplus">Push Plus</option>
+                            <option value="serverchan">Server酱</option>
+                            <option value="wxpusher">WxPusher</option>
+                        </select>
+                        <i class="bi bi-chevron-down select-icon"></i>
+                    </div>
+                </div>
+
+                <!-- 动态参数输入区 -->
+                <div id="notify-params-area" class="notify-params-box" style="display: none;"></div>
+            </div>
+            <div class="bottom-action double-btn">
+                <button class="btn-secondary-huge" onclick="goToStep(3, 2)">返回</button>
+                <button class="btn-primary-huge" id="installBtn" onclick="submitInstall()">完成部署</button>
+            </div>
+        </div>
+
+        <!-- 步骤 4：完成 -->
+        <div class="onboard-step right" id="step-4">
+            <div class="step-content-center text-center">
+                <div class="success-ring mb-4 mx-auto">
+                    <i class="bi bi-check-lg text-white" style="font-size: 48px;"></i>
+                </div>
+                <h2 class="hero-title mb-2">部署成功！</h2>
+                <p class="hero-subtitle">您的派大星面板已准备就绪</p>
+            </div>
+            <div class="bottom-action">
+                <button class="btn-primary-huge" onclick="window.location.href='/login'">进入控制台</button>
+            </div>
+        </div>
+
+    </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const installData = { username: "", password: "", notify_type: "none" };
+    
+    // 自定义移动端系统级弹窗（避免使用原生的 alert 破坏美感）
+    function showAppToast(msg) {
+        let toast = document.getElementById('app-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'app-toast';
+            toast.className = 'app-toast';
+            document.body.appendChild(toast);
+        }
+        toast.innerText = msg;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function togglePwd(id, icon) {
+        const el = document.getElementById(id);
+        if(el.type === "password") { el.type = "text"; icon.classList.replace('bi-eye-slash', 'bi-eye'); icon.style.color = '#2563eb'; }
+        else { el.type = "password"; icon.classList.replace('bi-eye', 'bi-eye-slash'); icon.style.color = '#9ca3af'; }
+    }
+
+    // 处理原生滑动动画
+    function goToStep(current, next) {
+        const currentEl = document.getElementById('step-' + current);
+        const nextEl = document.getElementById('step-' + next);
+        
+        // 更新顶部进度条
+        document.getElementById('progressIndicator').style.width = (next * 25) + '%';
+        
+        if (next > current) {
+            // 前进
+            nextEl.className = 'onboard-step right';
+            setTimeout(() => {
+                currentEl.className = 'onboard-step left';
+                nextEl.className = 'onboard-step active';
+            }, 50);
+        } else {
+            // 后退
+            nextEl.className = 'onboard-step left';
+            setTimeout(() => {
+                currentEl.className = 'onboard-step right';
+                nextEl.className = 'onboard-step active';
+            }, 50);
+        }
+    }
+
+    function validateStep2() {
+        const u = document.getElementById('reg_username').value.trim();
+        const p1 = document.getElementById('reg_pwd1').value;
+        const p2 = document.getElementById('reg_pwd2').value;
+
+        if(!u) return showAppToast("请输入管理员账号");
+        if(!p1) return showAppToast("请输入管理员密码");
+        if(p1 !== p2) return showAppToast("两次输入的密码不一致");
+
+        installData.username = u;
+        installData.password = p1;
+        goToStep(2, 3);
+    }
+
+    function handleNotifyChange() {
+        const type = document.getElementById('notify_type').value;
+        const area = document.getElementById('notify-params-area');
+        area.innerHTML = '';
+        installData.notify_type = type;
+
+        if(type === 'none') {
+            area.style.display = 'none';
+            return;
+        }
+
+        area.style.display = 'block';
+        if(type === 'telegram') {
+            area.innerHTML = `
+                <input type="text" id="tg_token" class="app-input param-input mb-3" placeholder="TG_BOT_TOKEN" required>
+                <input type="text" id="tg_userid" class="app-input param-input" placeholder="TG_USER_ID" required>
+            `;
+        } else if (type === 'dingtalk') {
+            area.innerHTML = `
+                <input type="text" id="dt_token" class="app-input param-input mb-3" placeholder="DD_BOT_TOKEN" required>
+                <input type="text" id="dt_secret" class="app-input param-input" placeholder="DD_BOT_SECRET (选填)">
+            `;
+        } else if (type === 'pushplus') {
+            area.innerHTML = `<input type="text" id="pp_token" class="app-input param-input" placeholder="PUSH_PLUS_TOKEN" required>`;
+        } else if (type === 'serverchan') {
+            area.innerHTML = `<input type="text" id="sc_key" class="app-input param-input" placeholder="PUSH_KEY" required>`;
+        } else if (type === 'wxpusher') {
+            area.innerHTML = `
+                <input type="text" id="wx_token" class="app-input param-input mb-3" placeholder="WXPUSHER_APP_TOKEN" required>
+                <input type="text" id="wx_uid" class="app-input param-input" placeholder="WXPUSHER_UID" required>
+            `;
+        }
+    }
+
+    function submitInstall() {
+        const payload = { ...installData };
+
+        if (payload.notify_type === 'telegram') {
+            payload.TG_BOT_TOKEN = document.getElementById('tg_token').value.trim();
+            payload.TG_USER_ID = document.getElementById('tg_userid').value.trim();
+            if(!payload.TG_BOT_TOKEN || !payload.TG_USER_ID) return showAppToast("请完整填写 Telegram 参数");
+        } else if (payload.notify_type === 'dingtalk') {
+            payload.DD_BOT_TOKEN = document.getElementById('dt_token').value.trim();
+            payload.DD_BOT_SECRET = document.getElementById('dt_secret').value.trim();
+            if(!payload.DD_BOT_TOKEN) return showAppToast("请填写钉钉 Token");
+        } else if (payload.notify_type === 'pushplus') {
+            payload.PUSH_PLUS_TOKEN = document.getElementById('pp_token').value.trim();
+            if(!payload.PUSH_PLUS_TOKEN) return showAppToast("请填写 PushPlus Token");
+        } else if (payload.notify_type === 'serverchan') {
+            payload.PUSH_KEY = document.getElementById('sc_key').value.trim();
+            if(!payload.PUSH_KEY) return showAppToast("请填写 Server酱 PUSH_KEY");
+        } else if (payload.notify_type === 'wxpusher') {
+            payload.WXPUSHER_APP_TOKEN = document.getElementById('wx_token').value.trim();
+            payload.WXPUSHER_UID = document.getElementById('wx_uid').value.trim();
+            if(!payload.WXPUSHER_APP_TOKEN || !payload.WXPUSHER_UID) return showAppToast("请完整填写 WxPusher 参数");
+        }
+
+        const btn = document.getElementById('installBtn');
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>部署中...`;
+
+        // 核心修复点：显式声明 Content-Type 防止 415 报错
+        fetch('/install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(res => {
+            if(!res.ok) throw new Error("HTTP " + res.status);
+            return res.json();
+        })
+        .then(data => {
+            if(data.status === 'success') {
+                goToStep(3, 4);
+            } else {
+                showAppToast(data.msg || "初始化失败，请重试");
+                btn.disabled = false;
+                btn.innerHTML = "完成部署";
+            }
+        }).catch(err => {
+            showAppToast("网络请求发生错误");
+            btn.disabled = false;
+            btn.innerHTML = "完成部署";
+        });
+    }
+</script>
 {% endblock %}

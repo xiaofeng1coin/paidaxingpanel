@@ -10,10 +10,10 @@ echo -e "\n[1/6] 正在请求手机存储权限，若手机弹出提示框，请
 termux-setup-storage
 sleep 3
 
-# 2. 安装基础环境
-echo -e "\n[2/6] 正在更新系统软件源并安装必备环境 (Python, Node.js, Git)..."
+# 2. 安装基础环境与底层编译工具链 (去除了报错的 tzdata，由后续 pip 接管)
+echo -e "\n[2/6] 正在更新系统软件源并安装必备环境与编译库..."
 pkg update -y
-pkg install -y python nodejs git wget curl
+pkg install -y python nodejs git wget curl clang make libffi openssl pkg-config
 
 # 3. 克隆项目源码
 echo -e "\n[3/6] 正在下载派大星面板源码..."
@@ -28,10 +28,13 @@ REPO_URL="https://github.com/xiaofeng1coin/paidaxingpanel.git"
 git clone $REPO_URL PatrickPanel
 cd PatrickPanel
 
-# 4. 安装 Python 依赖 (过滤掉安卓不支持的 Windows/GUI 依赖)
-echo -e "\n[4/6] 正在安装 Python 依赖库..."
+# 4. 安装 Python 依赖 (过滤掉安卓不支持的 Windows/GUI 依赖，并补齐 Python 版 tzdata)
+echo -e "\n[4/6] 正在安装 Python 依赖库，可能需要编译，请耐心等待..."
 grep -v "pywebview\|pystray\|Pillow" requirements.txt > req_termux.txt
-pip install --upgrade pip
+# 强制向依赖文件中追加 Python 官方时区数据包，完美替代系统级 tzdata
+echo "tzdata" >> req_termux.txt
+
+export CRYPTOGRAPHY_DONT_BUILD_RUST=1
 pip install --no-cache-dir -r req_termux.txt
 
 # 5. 生成守护与启动脚本
