@@ -59,3 +59,4 @@ Dockerfile
 docker-compose.yml
 # PyInstaller
 package.spec
+install_termux.sh
