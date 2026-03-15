@@ -59,15 +59,23 @@ else:
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     if os.environ.get('ANDROID_DATA_DIR'):
         DATA_DIR = os.environ.get('ANDROID_DATA_DIR')
+    elif os.environ.get('TERMUX_DATA_DIR'):
+        DATA_DIR = os.environ.get('TERMUX_DATA_DIR')
     else:
         DATA_DIR = os.path.join(BASE_DIR, 'data')
 
 SCRIPTS_DIR = os.path.join(DATA_DIR, 'scripts')
 LOGS_DIR = os.path.join(DATA_DIR, 'logs')
-DB_DIR = os.path.join(DATA_DIR, 'db')
 CONFIG_DIR = os.path.join(DATA_DIR, 'config')
 
-DEPS_ENV_DIR = os.path.join(DATA_DIR, 'deps_env')
+if os.environ.get('TERMUX_DATA_DIR'):
+    PRIVATE_DATA_DIR = os.environ.get('TERMUX_PRIVATE_DIR', os.path.join(BASE_DIR, 'data_private'))
+    DB_DIR = os.path.join(PRIVATE_DATA_DIR, 'db')
+    DEPS_ENV_DIR = os.path.join(PRIVATE_DATA_DIR, 'deps_env')
+else:
+    DB_DIR = os.path.join(DATA_DIR, 'db')
+    DEPS_ENV_DIR = os.path.join(DATA_DIR, 'deps_env')
+
 NODE_DIR = os.path.join(DEPS_ENV_DIR, 'nodejs')
 PYTHON_DIR = os.path.join(DEPS_ENV_DIR, 'python')
 LINUX_DIR = os.path.join(DEPS_ENV_DIR, 'linux')
@@ -1786,6 +1794,7 @@ def api_update_do():
         stream_id = "sys_update"
         is_exe = getattr(sys, 'frozen', False)
         is_magisk = bool(os.environ.get('ANDROID_DATA_DIR'))
+        is_termux = bool(os.environ.get('TERMUX_DATA_DIR'))
         branch = os.environ.get('GITHUB_BRANCH', 'main')
 
         try:
@@ -1852,8 +1861,12 @@ def api_update_do():
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': f"==============================================\n更新失败触发标识\n"}) # 发送失败标志强制前端关闭转圈并让用户看提示
                 
             else:
-                # ================= 原有的源码/Docker 更新逻辑 =================
-                socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🐳 检测到当前为 Docker/源码 环境，获取最新源码压缩包...\n"})
+                # ================= 原有的源码/Docker/Termux 更新逻辑 =================
+                if is_termux:
+                    socketio.emit('log_stream', {'task_id': stream_id, 'data': f"📱 检测到当前为安卓 Termux 环境，获取最新源码压缩包...\n"})
+                else:
+                    socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🐳 检测到当前为 Docker/源码 环境，获取最新源码压缩包...\n"})
+                
                 url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=60) as res:
