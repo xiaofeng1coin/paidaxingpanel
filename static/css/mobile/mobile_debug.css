@@ -1,0 +1,14 @@
+/* mobile_debug.css */
+.accordion-list { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin-top: 16px; }
+.list-item { border-bottom: 1px solid var(--border); }
+.list-item:last-child { border-bottom: none; }
+
+.item-row { padding: 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s; }
+.item-row:active { background: var(--bg); }
+.item-name { font-size: 15px; font-weight: 600; color: var(--text-main); }
+.item-icon { font-size: 18px; color: var(--text-sub); }
+
+.detail-panel { padding: 0 16px 16px 16px; background: var(--surface); }
+.debug-output { width: 100%; background: #0f172a; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 11px; color: #34d399; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin: 0; }
+
+.btn-action { display: block; width: 100%; padding: 12px 0; border-radius: 8px; font-size: 14px; font-weight: 600; border: none; background: var(--text-main); color: #fff; text-align: center; margin-bottom: 12px; }

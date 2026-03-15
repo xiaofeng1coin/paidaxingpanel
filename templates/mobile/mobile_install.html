@@ -1,0 +1,20 @@
+<!-- mobile_install.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_install.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="login-box">
+    <div class="auth-title"><i class="bi bi-hdd-network text-primary"></i> 部署系统</div>
+    <div class="auth-subtitle">首次运行，请设置管理员凭证</div>
+    
+    <form method="POST" action="/install">
+        <input type="text" name="username" class="tech-input" placeholder="设置管理员账号" required autocomplete="off">
+        <input type="password" name="password" class="tech-input" placeholder="设置管理员密码" required autocomplete="new-password">
+        <button type="submit" class="btn-submit mt-2">开 始 部 署</button>
+    </form>
+</div>
+{% endblock %}

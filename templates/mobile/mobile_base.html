@@ -1,0 +1,91 @@
+<!-- mobile_base.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>派大星面板</title>
+    <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/mobile/mobile_base.css') }}" rel="stylesheet">
+    {% block styles %}{% endblock %}
+</head>
+<body>
+    {% if current_user.is_authenticated and request.endpoint not in ['login'] %}
+    <header class="app-header">
+        <div class="app-logo">
+            <i class="bi bi-cpu text-primary"></i> 派大星面板
+            <!-- 新增：版本号显示 -->
+            <span style="font-size: 12px; font-weight: 500; color: var(--text-sub); margin-left: 6px; font-family: monospace; margin-top: 2px;">v{{ sys_version }}</span>
+        </div>
+        <!-- 这里是关键：子页面注入返回按钮的槽位 -->
+        <div class="header-actions">
+            {% block header_actions %}{% endblock %}
+        </div>
+    </header>
+
+    {% if request.endpoint not in ['scripts_editor', 'config_editor', 'logs'] %}
+    <nav class="top-scroll-nav">
+        <a href="/" class="nav-tab {% if request.path == '/' %}active{% endif %}">定时任务</a>
+        <a href="/subs" class="nav-tab {% if request.path == '/subs' %}active{% endif %}">订阅管理</a>
+        <a href="/envs" class="nav-tab {% if request.path == '/envs' %}active{% endif %}">环境变量</a>
+        <a href="/scripts" class="nav-tab {% if request.path == '/scripts' %}active{% endif %}">脚本管理</a>
+        <a href="/settings" class="nav-tab {% if request.path == '/settings' %}active{% endif %}">系统设置</a>
+    </nav>
+    {% endif %}
+    {% endif %}
+
+    <div class="toast-container position-fixed top-0 start-50 translate-middle-x mt-3" style="width: 90%;">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="toast align-items-center text-white bg-dark border-0 show w-100 rounded-3 shadow-lg" role="alert" data-bs-delay="2500">
+                    <div class="d-flex p-3"><div class="toast-body fs-6 p-0 fw-bold">{{ messages[0] }}</div></div>
+                </div>
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <div>
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- 底部确认抽屉 -->
+    <div class="offcanvas offcanvas-bottom rounded-top-4" tabindex="-1" id="sysConfirmSheet" style="height: auto;">
+        <div class="offcanvas-body p-4 text-center">
+            <h6 class="mb-4 fw-bold text-dark" id="sysConfirmMessage" style="font-size: 16px; line-height: 1.5;"></h6>
+            <div class="d-flex gap-3">
+                <button type="button" class="btn btn-light flex-fill rounded-3 py-3 fw-bold" data-bs-dismiss="offcanvas">取消操作</button>
+                <button type="button" class="btn btn-dark flex-fill rounded-3 py-3 fw-bold" id="sysConfirmBtn">确认执行</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            window.sysConfirm = function(msg, cb) {
+                document.getElementById('sysConfirmMessage').innerText = msg;
+                const m = new bootstrap.Offcanvas(document.getElementById('sysConfirmSheet'));
+                document.getElementById('sysConfirmBtn').onclick = function() { m.hide(); if(cb) cb(); }; m.show();
+            };
+
+            document.addEventListener('click', function(e) {
+                const t = e.target.closest('[onclick*="confirm("]');
+                if (t && !t.dataset.confirmed) {
+                    e.preventDefault(); e.stopPropagation();
+                    const msg = (t.getAttribute('onclick').match(/confirm\(['"](.*?)['"]\)/) || [])[1] || '确认执行此操作？';
+                    window.sysConfirm(msg, function() {
+                        t.dataset.confirmed = 'true';
+                        if (t.tagName === 'A' && t.href && !t.href.startsWith('javascript:')) window.location.href = t.href;
+                        else { const s = t.getAttribute('onclick').replace(/return\s+confirm\(['"].*?['"]\);?/g, ''); if (s.trim()) new Function(s).call(t); }
+                    });
+                }
+            }, true);
+
+            document.querySelectorAll('.toast').forEach(t => new bootstrap.Toast(t).show());
+        });
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

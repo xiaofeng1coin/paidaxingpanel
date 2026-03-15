@@ -1,0 +1,94 @@
+/* mobile_base.css */
+:root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --text-main: #111827;
+    --text-sub: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+}
+
+body { 
+    background-color: var(--bg); 
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; 
+    color: var(--text-main); 
+    padding-bottom: 40px; 
+    -webkit-tap-highlight-color: transparent; 
+}
+
+/* 修复1：加上完整的头部布局，让返回按钮有地方显示 */
+.app-header { 
+    background: var(--surface); 
+    padding: 16px 20px 10px; 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+}
+.app-logo { 
+    font-size: 20px; 
+    font-weight: 800; 
+    letter-spacing: -0.5px; 
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+    color: var(--text-main); 
+}
+.header-actions { 
+    display: flex; 
+    align-items: center; 
+    gap: 12px; 
+}
+
+.top-scroll-nav { 
+    background: var(--surface); 
+    display: flex; 
+    overflow-x: auto; 
+    padding: 0 16px; 
+    border-bottom: 1px solid var(--border); 
+    position: sticky; 
+    top: 0; 
+    z-index: 1020; 
+    scrollbar-width: none; 
+}
+.top-scroll-nav::-webkit-scrollbar { display: none; }
+.nav-tab { 
+    padding: 14px 12px; 
+    font-size: 14px; 
+    font-weight: 600; 
+    color: var(--text-sub); 
+    text-decoration: none; 
+    white-space: nowrap; 
+    border-bottom: 2px solid transparent; 
+    transition: color 0.2s; 
+}
+.nav-tab.active { 
+    color: var(--accent); 
+    border-bottom-color: var(--accent); 
+}
+
+/* 修复2：解决吐司遮挡下拉框的问题 (让鼠标穿透容器) */
+.toast-container { 
+    z-index: 1055; 
+    pointer-events: none; 
+}
+.toast { pointer-events: auto; }
+
+.fab { 
+    position: fixed; 
+    bottom: 30px; 
+    right: 20px; 
+    width: 56px; 
+    height: 56px; 
+    background: var(--text-main); 
+    color: white; 
+    border-radius: 50%; 
+    display: flex; 
+    justify-content: center; 
+    align-items: center; 
+    font-size: 24px; 
+    box-shadow: 0 10px 25px rgba(0,0,0,0.2); 
+    z-index: 1000; 
+    border: none; 
+    transition: transform 0.2s; 
+}
+.fab:active { transform: scale(0.9); }

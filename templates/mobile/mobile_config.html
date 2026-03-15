@@ -1,0 +1,18 @@
+<!-- mobile_config.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}全局配置{% endblock %}
+
+{% block header_actions %}
+<a href="/settings"><i class="bi bi-x-lg text-dark" style="font-size: 20px;"></i></a>
+{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_config.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<form method="POST" action="/config" class="config-wrapper" id="configForm">
+    <textarea name="config_content" class="config-textarea" spellcheck="false" placeholder="# 输入您的全局配置...">{{ config_content }}</textarea>
+</form>
+<button class="fab-save" onclick="document.getElementById('configForm').submit()"><i class="bi bi-floppy-fill"></i> 保存</button>
+{% endblock %}

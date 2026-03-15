@@ -1,0 +1,32 @@
+/* mobile_subs.css */
+.accordion-list { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.list-item { border-bottom: 1px solid var(--border); }
+.list-item:last-child { border-bottom: none; }
+
+.item-row { padding: 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s; }
+.item-row:active { background: var(--bg); }
+
+.item-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+.status-ring { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.status-ring.running { background: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,0.2); }
+.status-ring.idle { background: #d1d5db; }
+.status-ring.error { background: #ef4444; }
+.status-ring.disabled { background: #f59e0b; }
+
+.item-name { font-size: 15px; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.btn-quick-run { width: 36px; height: 36px; border-radius: 18px; background: #eff6ff; color: var(--accent); border: none; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+.btn-quick-run:disabled { opacity: 0.5; background: #f3f4f6; color: #9ca3af; }
+
+/* 展开面板 */
+.detail-panel { padding: 0 16px 16px 42px; background: var(--surface); }
+.detail-text { font-family: monospace; font-size: 12px; color: var(--text-sub); margin-bottom: 6px; word-break: break-all; }
+
+.action-group { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.btn-action { flex: 1; min-width: 30%; padding: 8px 0; border-radius: 6px; font-size: 13px; font-weight: 600; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); text-decoration: none; text-align: center; }
+.btn-action.text-danger { color: #ef4444; border-color: #fca5a5; background: #fef2f2; }
+
+/* 内嵌终端 */
+.inline-terminal { background: #0f172a; border-radius: 8px; margin-top: 12px; overflow: hidden; display: none; }
+.terminal-header { background: #1e293b; padding: 6px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #94a3b8; font-weight: bold; }
+.terminal-body { padding: 12px; font-family: 'Courier New', Courier, monospace; font-size: 11px; color: #34d399; max-height: 250px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin: 0; }

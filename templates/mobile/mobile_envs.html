@@ -1,0 +1,88 @@
+<!-- mobile_envs.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}环境变量{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_envs.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="accordion-list mt-2">
+    {% for env in pagination.items %}
+    <div class="list-item {% if env.is_disabled == 1 %}disabled{% endif %}" id="env-item-{{ env.id }}">
+        <div class="item-row" onclick="document.getElementById('env-item-{{ env.id }}').classList.toggle('expanded')">
+            <div class="item-name"><i class="bi bi-braces text-primary"></i> {{ env.name }}</div>
+            <div class="item-preview">{{ env.value }}</div>
+        </div>
+
+        <div class="detail-panel" id="panel-{{ env.id }}">
+            <textarea class="env-full-value" rows="3" readonly>{{ env.value }}</textarea>
+            {% if env.remarks %}<div class="mt-2 text-muted" style="font-size: 12px;"><i class="bi bi-info-circle me-1"></i>{{ env.remarks }}</div>{% endif %}
+            
+            <div class="action-group">
+                <button class="btn-action" onclick='openEditModal({{ env.id }}, {{ env.name | tojson }}, {{ env.value | tojson }}, {{ env.remarks | tojson }})'>编辑</button>
+                <a class="btn-action secondary" href="/api/env/toggle/{{ env.id }}">{% if env.is_disabled == 1 %}启用{% else %}禁用{% endif %}</a>
+                <button class="btn-action danger" onclick="if(confirm('删除此变量？')) window.location.href='/env/delete/{{ env.id }}'">删除</button>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+        <i class="bi bi-box fs-1 mb-2 d-block opacity-50"></i>
+        <p class="font-monospace text-sm">暂无环境变量</p>
+    </div>
+    {% endfor %}
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="d-flex justify-content-center mt-4">
+    <div class="btn-group bg-white rounded-3 shadow-sm border">
+        <a href="{{ url_for('envs', page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
+        <span class="btn btn-light border-0 disabled text-dark fw-bold font-monospace px-4">{{ pagination.page }} / {{ pagination.pages }}</span>
+        <a href="{{ url_for('envs', page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
+    </div>
+</div>
+{% endif %}
+
+<button class="fab" data-bs-toggle="modal" data-bs-target="#envModal" onclick="prepareAdd()"><i class="bi bi-plus-lg"></i></button>
+
+<div class="modal fade" id="envModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered mx-3">
+        <form class="modal-content border-0 rounded-4" id="envForm" method="POST" action="/envs">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold" id="envModalTitle">添加变量</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="text" name="name" id="env_name" class="form-control bg-light border-0 p-3 mb-3 rounded-3 font-monospace" placeholder="变量名" required>
+                <textarea name="value" id="env_value" class="form-control bg-light border-0 p-3 mb-3 rounded-3 font-monospace" rows="4" placeholder="变量值" required style="resize: none;"></textarea>
+                <input type="text" name="remarks" id="env_remarks" class="form-control bg-light border-0 p-3 mb-2 rounded-3" placeholder="备注">
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保 存</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const envModal = new bootstrap.Modal(document.getElementById('envModal'));
+    function prepareAdd() {
+        document.getElementById('envModalTitle').innerText = '添加变量';
+        document.getElementById('envForm').action = '/envs';
+        document.getElementById('env_name').value = '';
+        document.getElementById('env_value').value = '';
+        document.getElementById('env_remarks').value = '';
+    }
+    function openEditModal(id, name, value, remarks) {
+        document.getElementById('envModalTitle').innerText = '编辑变量';
+        document.getElementById('envForm').action = `/env/edit/${id}`;
+        document.getElementById('env_name').value = name;
+        document.getElementById('env_value').value = value;
+        document.getElementById('env_remarks').value = remarks || '';
+        envModal.show();
+    }
+</script>
+{% endblock %}

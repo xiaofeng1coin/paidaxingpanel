@@ -1,0 +1,74 @@
+<!-- mobile_scripts.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}脚本管理{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_scripts.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="custom-toolbar">
+    <a href="/" class="btn-back"><i class="bi bi-arrow-left"></i></a>
+    <select class="file-select" onchange="window.location.href='/scripts?file=' + this.value">
+        {% for folder, files in tree.items() %}
+            <optgroup label="📂 {{ folder }}">
+            {% for f in files %}
+                {% set file_path = folder ~ '/' ~ f if folder != '根目录' else f %}
+                <option value="{{ file_path }}" {% if current_file == file_path %}selected{% endif %}>{{ f }}</option>
+            {% endfor %}
+            </optgroup>
+        {% endfor %}
+    </select>
+</div>
+
+<div class="editor-wrapper">
+    <div id="monaco-editor"></div>
+</div>
+
+<button class="fab-save" onclick="saveScript()"><i class="bi bi-floppy-fill"></i> 保存</button>
+
+<form id="saveForm" method="POST" style="display:none;">
+    <input type="hidden" name="filename" value="{{ current_file }}">
+    <textarea name="content" id="hiddenContent"></textarea>
+</form>
+
+<script id="raw-script-content" type="application/json">
+    {{ content | tojson | safe }}
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/monaco-editor/min/vs/loader.js') }}"></script>
+<script>
+    require.config({ paths: { 'vs': "{{ url_for('static', filename='vendor/monaco-editor/min/vs') }}" }});
+    let editor;
+
+    let lang = 'plaintext';
+    const filename = "{{ current_file_name }}";
+    if(filename.endsWith('.js')) lang = 'javascript';
+    else if(filename.endsWith('.py')) lang = 'python';
+    else if(filename.endsWith('.sh')) lang = 'shell';
+
+    let safeContent = "";
+    try { safeContent = JSON.parse(document.getElementById('raw-script-content').textContent); } catch(e) {}
+
+    require(['vs/editor/editor.main'], function () {
+        editor = monaco.editor.create(document.getElementById('monaco-editor'), {
+            value: safeContent,
+            language: lang,
+            theme: 'vs', 
+            automaticLayout: true,
+            fontSize: 13, 
+            minimap: { enabled: false }, 
+            wordWrap: "on",
+            padding: { top: 16 }
+        });
+    });
+
+    function saveScript() {
+        if(!editor) return;
+        document.getElementById('hiddenContent').value = editor.getValue();
+        document.getElementById('saveForm').submit();
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,76 @@
+<!-- mobile_logs.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}系统日志{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_logs.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="custom-toolbar">
+    <a href="/settings" class="btn-back"><i class="bi bi-arrow-left"></i></a>
+    <!-- 换个思路：使用按钮触发底部抽屉，替代原生 select -->
+    <button class="file-select-btn" type="button" data-bs-toggle="offcanvas" data-bs-target="#logTreeOffcanvas">
+        {% if current_file %}
+            📄 {{ current_folder }}/{{ current_file }}
+        {% else %}
+            📁 点击选择日志文件...
+        {% endif %}
+        <i class="bi bi-chevron-down ms-auto"></i>
+    </button>
+</div>
+
+<div class="log-viewer" id="logViewer">{{ content }}</div>
+
+<!-- 底部弹出的目录树抽屉 -->
+<div class="offcanvas offcanvas-bottom rounded-top-4" tabindex="-1" id="logTreeOffcanvas" style="height: 75vh;">
+    <div class="offcanvas-header border-bottom py-3">
+        <h6 class="offcanvas-title fw-bold text-dark"><i class="bi bi-list-nested me-2"></i>日志目录</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body p-0 bg-light">
+        <div class="accordion accordion-flush" id="logAccordion">
+            {% for folder, files in tree.items() %}
+            <div class="accordion-item border-0 bg-transparent mb-1">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed fw-bold text-dark py-3 shadow-sm bg-white" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index }}">
+                        <i class="bi bi-folder2-open text-primary me-2 fs-5"></i> 
+                        <span class="flex-grow-1">{{ folder }}</span>
+                        <span class="badge bg-secondary rounded-pill me-2">{{ files|length }}</span>
+                    </button>
+                </h2>
+                <div id="collapse-{{ loop.index }}" class="accordion-collapse collapse {% if current_folder == folder %}show{% endif %}" data-bs-parent="#logAccordion">
+                    <div class="accordion-body p-0">
+                        <ul class="list-group list-group-flush">
+                            {% for f in files %}
+                            <!-- 核心修复：精准拼接 folder 和 file 参数 -->
+                            <a href="/logs?folder={{ folder }}&file={{ f }}" class="list-group-item list-group-item-action py-3 border-bottom {% if current_file == f and current_folder == folder %}active bg-primary text-white border-primary{% else %}text-secondary{% endif %}" style="padding-left: 3rem; font-size: 13px; font-family: monospace;">
+                                <i class="bi bi-file-earmark-text me-2"></i> {{ f }}
+                            </a>
+                            {% else %}
+                            <div class="py-3 text-muted text-center small">该文件夹为空</div>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="p-5 text-center text-muted">
+                <i class="bi bi-inbox fs-1 mb-2 d-block opacity-50"></i> 
+                <span>暂无任何日志</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // 自动滚动到底部
+    const viewer = document.getElementById('logViewer');
+    if (viewer) {
+        viewer.scrollTop = viewer.scrollHeight;
+    }
+</script>
+{% endblock %}

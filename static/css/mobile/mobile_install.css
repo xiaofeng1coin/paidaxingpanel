@@ -1,0 +1,13 @@
+/* mobile_install.css */
+body { background: var(--bg); display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+.app-header { display: none !important; }
+
+.login-box { background: var(--surface); width: 90%; max-width: 400px; padding: 40px 30px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 4px 20px rgba(0,0,0,0.03); }
+.auth-title { font-size: 20px; font-weight: 800; color: var(--text-main); margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+.auth-subtitle { font-size: 13px; color: var(--text-sub); margin-bottom: 24px; }
+
+.tech-input { width: 100%; background: var(--bg); border: 1px solid var(--border); padding: 14px 16px; border-radius: 8px; font-size: 15px; margin-bottom: 16px; outline: none; transition: 0.2s; font-family: monospace; }
+.tech-input:focus { border-color: var(--text-main); box-shadow: 0 0 0 2px rgba(17, 24, 39, 0.1); }
+
+.btn-submit { background: var(--text-main); color: #fff; width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
+.btn-submit:active { transform: scale(0.98); background: #374151; }

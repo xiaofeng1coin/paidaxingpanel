@@ -1,0 +1,74 @@
+<!-- mobile_login.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_login.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="login-wrapper">
+    <div class="login-card">
+        <form method="POST" action="/login">
+            {% if need_2fa %}
+                <div class="text-center mb-4">
+                    <div class="logo-box" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%);">
+                        <i class="bi bi-shield-lock-fill"></i>
+                    </div>
+                    <h4 class="login-title">两步验证</h4>
+                    <div class="login-subtitle">为保障安全，请输入安全验证码</div>
+                </div>
+
+                <input type="hidden" name="username" value="{{ temp_user }}">
+                <input type="hidden" name="password" value="{{ temp_pwd }}">
+
+                <div class="mb-4">
+                    <input type="number" name="totp_code" class="form-control totp-input" placeholder="------" autofocus required maxlength="6">
+                </div>
+
+                <button type="submit" class="btn-login" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%);">验 证 登 录</button>
+                <div class="text-center mt-4">
+                    <a href="/login" class="text-muted small text-decoration-none"><i class="bi bi-arrow-left me-1"></i>返回重新登录</a>
+                </div>
+            {% else %}
+                <div class="text-center mb-4">
+                    <div class="logo-box">
+                        <i class="bi bi-star-fill"></i>
+                    </div>
+                    <h4 class="login-title">派大星面板</h4>
+                    <div class="login-subtitle">请输入您的管理凭证</div>
+                </div>
+
+                <div class="custom-input-group">
+                    <input type="text" name="username" class="form-control" placeholder="用户名" required autocomplete="username">
+                    <i class="bi bi-person input-icon"></i>
+                </div>
+
+                <div class="custom-input-group mb-4">
+                    <input type="password" id="loginPwd" name="password" class="form-control" placeholder="密码" required autocomplete="current-password">
+                    <i class="bi bi-key input-icon"></i>
+                    <i id="eyeIcon" class="bi bi-eye-slash eye-icon" onclick="togglePwd()"></i>
+                </div>
+
+                <button type="submit" class="btn-login">登 录 系 统</button>
+            {% endif %}
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function togglePwd() {
+        const input = document.getElementById('loginPwd');
+        const icon = document.getElementById('eyeIcon');
+        if (input.type === "password") {
+            input.type = "text";
+            icon.classList.replace('bi-eye-slash', 'bi-eye');
+        } else {
+            input.type = "password";
+            icon.classList.replace('bi-eye', 'bi-eye-slash');
+        }
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,151 @@
+<!-- mobile_deps.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}依赖管理{% endblock %}
+
+{% block header_actions %}
+<a href="/settings"><i class="bi bi-x-lg text-dark" style="font-size: 20px;"></i></a>
+{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_deps.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="filter-pills">
+    <a href="/deps?type=npm" class="pill {% if current_type == 'npm' %}active{% endif %}">NodeJS</a>
+    <a href="/deps?type=pip" class="pill {% if current_type == 'pip' %}active{% endif %}">Python</a>
+    <a href="/deps?type=apt" class="pill {% if current_type == 'apt' %}active{% endif %}">Linux</a>
+</div>
+
+<form class="install-bar" id="installForm">
+    <input type="hidden" name="type" value="{{ current_type }}">
+    <input type="text" name="package" class="install-input" placeholder="输入 {{ current_type }} 包名" required>
+    <button type="submit" class="install-btn" id="installBtn">安装</button>
+</form>
+
+<div class="inline-terminal mx-3 mb-3" id="global-term">
+    <div class="terminal-header">
+        <span>安装日志</span>
+        <i class="bi bi-x-circle" style="cursor: pointer;" onclick="document.getElementById('global-term').style.display='none'"></i>
+    </div>
+    <pre class="terminal-body" id="global-term-body"></pre>
+</div>
+
+<div class="accordion-list">
+    {% for dep in pagination.items %}
+    <div class="list-item" id="dep-item-{{ dep.id }}">
+        <div class="item-row" onclick="document.getElementById('dep-item-{{ dep.id }}').classList.toggle('expanded')">
+            <div class="item-name">{{ dep.name }}</div>
+            <div>
+                {% if dep.status == 'Installed' %}<span class="status-badge installed">已安装</span>
+                {% elif dep.status in ['Installing', 'Uninstalling'] %}<span class="status-badge processing">处理中</span>
+                {% else %}<span class="status-badge error">出错</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="detail-panel" id="panel-{{ dep.id }}">
+            <div class="action-group">
+                <button class="btn-action" onclick="toggleTerminal({{ dep.id }})"><i class="bi bi-terminal me-1"></i>日志</button>
+                <button class="btn-action text-danger" onclick="uninstallDep({{ dep.id }}, '{{ dep.name }}')"><i class="bi bi-trash3 me-1"></i>卸载</button>
+            </div>
+            
+            <div class="inline-terminal" id="term-{{ dep.id }}">
+                <div class="terminal-header">
+                    <span>运行日志</span>
+                    <i class="bi bi-x-circle" style="cursor: pointer;" onclick="toggleTerminal({{ dep.id }})"></i>
+                </div>
+                <pre class="terminal-body" id="term-body-{{ dep.id }}"></pre>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+        <i class="bi bi-box-seam fs-1 mb-2 d-block opacity-50"></i>
+        <p class="font-monospace text-sm">暂无依赖</p>
+    </div>
+    {% endfor %}
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="d-flex justify-content-center mt-4">
+    <div class="btn-group bg-white rounded-3 shadow-sm border">
+        <a href="{{ url_for('deps', type=current_type, page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
+        <span class="btn btn-light border-0 disabled text-dark fw-bold font-monospace px-4">{{ pagination.page }} / {{ pagination.pages }}</span>
+        <a href="{{ url_for('deps', type=current_type, page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const socket = io(); 
+    let activeTerminalId = null;
+
+    function toggleTerminal(id) {
+        const termBox = document.getElementById(`term-${id}`);
+        const termBody = document.getElementById(`term-body-${id}`);
+        if (termBox.style.display === 'block') {
+            termBox.style.display = 'none';
+            if(activeTerminalId === id) activeTerminalId = null;
+        } else {
+            termBox.style.display = 'block';
+            activeTerminalId = id;
+            termBody.innerText = 'Loading logs...\n';
+            fetch(`/api/deps/log/${id}`).then(r => r.json()).then(d => { 
+                if(activeTerminalId === id) {
+                    termBody.innerText = d.content.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, ''); 
+                    termBody.scrollTop = termBody.scrollHeight; 
+                }
+            }); 
+        }
+    }
+
+    document.getElementById('installForm').addEventListener('submit', function(e) {
+        e.preventDefault(); 
+        document.getElementById('installBtn').disabled = true;
+        const globalTerm = document.getElementById('global-term');
+        const globalBody = document.getElementById('global-term-body');
+        
+        fetch('/api/deps/install', { method: 'POST', body: new FormData(this) }).then(r => r.json()).then(d => {
+            if (d.status === 'success') {
+                globalTerm.style.display = 'block';
+                activeTerminalId = d.id;
+                globalBody.innerText = '> Initializing...\n';
+            } else {
+                alert('错误: ' + d.msg);
+                document.getElementById('installBtn').disabled = false;
+            }
+        });
+    });
+
+    function uninstallDep(id, pkg) {
+        window.sysConfirm(`确定卸载依赖 [ ${pkg} ] 吗？`, () => {
+            const termBox = document.getElementById(`term-${id}`);
+            if(termBox.style.display !== 'block') { toggleTerminal(id); }
+            document.getElementById(`term-body-${id}`).innerText = '> Uninstalling...\n';
+            fetch(`/api/deps/uninstall/${id}`, { method: 'POST' });
+        });
+    }
+
+    socket.on('log_stream', function(msg) {
+        if (msg.task_id === `dep_${activeTerminalId}`) {
+            const gBody = document.getElementById('global-term-body');
+            const iBody = document.getElementById(`term-body-${activeTerminalId}`);
+            const targetBody = gBody.parentElement.style.display === 'block' ? gBody : iBody;
+            
+            if(!targetBody) return;
+            if (msg.clear) targetBody.innerText = '';
+            targetBody.innerText += msg.data.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, ''); 
+            targetBody.scrollTop = targetBody.scrollHeight;
+        }
+    });
+
+    socket.on('dep_status', function(msg) {
+        if(msg.status === 'Deleted' || msg.status === 'Installed' || msg.status === 'Error') {
+            setTimeout(() => location.reload(), 1500);
+        }
+    });
+</script>
+{% endblock %}

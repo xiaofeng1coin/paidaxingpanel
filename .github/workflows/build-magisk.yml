@@ -152,6 +152,6 @@ jobs:
       with:
         tag_name: Magisk-v1.0.7
         name: 派大星面板 面具模块 v1.0.7
-        files: PatrickPanel-Magisk-v1.0.7.zip
+        files: 派大星面板-Magisk-v1.0.7.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,157 @@
+<!-- mobile_tasks.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}任务列表{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_tasks.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="filter-pills">
+    <a href="/?status=all" class="pill {% if status_filter == 'all' %}active{% endif %}">全部</a>
+    <a href="/?status=normal" class="pill {% if status_filter == 'normal' %}active{% endif %}">正常</a>
+    <a href="/?status=disabled" class="pill {% if status_filter == 'disabled' %}active{% endif %}">禁用</a>
+</div>
+
+<div class="accordion-list">
+    {% for task in pagination.items %}
+    <div class="task-item" id="item-{{ task.id }}">
+        <div class="task-row" onclick="document.getElementById('item-{{ task.id }}').classList.toggle('expanded')">
+            <div class="task-info">
+                <div class="status-ring {% if task.is_disabled == 1 %}disabled{% elif task.status == 'Running' %}running{% elif task.status == 'Error' %}error{% else %}idle{% endif %}" id="ring-{{ task.id }}"></div>
+                <div class="task-name">{{ task.name }}</div>
+            </div>
+            <div id="quick-action-{{ task.id }}">
+                {% if task.status == 'Running' %}
+                <button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask({{ task.id }})"><i class="bi bi-stop-fill"></i></button>
+                {% else %}
+                <button class="btn-quick-run" onclick="event.stopPropagation(); runTask({{ task.id }})"><i class="bi bi-play-fill"></i></button>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="task-detail-panel" id="panel-{{ task.id }}">
+            <div class="detail-text"><i class="bi bi-terminal me-1"></i>{{ task.command }}</div>
+            <div class="detail-text"><i class="bi bi-stopwatch me-1"></i>{{ task.cron }}</div>
+            
+            <div class="action-group">
+                <button class="btn-action" onclick="toggleTerminal({{ task.id }})"><i class="bi bi-card-text me-1"></i>日志</button>
+                <a class="btn-action" href="/api/task/toggle/{{ task.id }}">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
+                <button class="btn-action text-danger" onclick="if(confirm('删除此任务？')) window.location.href='/task/delete/{{ task.id }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
+            </div>
+
+            <div class="inline-terminal" id="term-{{ task.id }}">
+                <div class="terminal-header">
+                    <span>运行日志</span>
+                    <i class="bi bi-x-circle fs-6" style="cursor: pointer;" onclick="toggleTerminal({{ task.id }})"></i>
+                </div>
+                <pre class="terminal-body" id="term-body-{{ task.id }}"></pre>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+        <i class="bi bi-journal-x fs-1 mb-2 d-block opacity-50"></i>
+        <p class="font-monospace text-sm">暂无任务</p>
+    </div>
+    {% endfor %}
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="d-flex justify-content-center mt-4">
+    <div class="btn-group bg-white rounded-3 shadow-sm border">
+        <a href="{{ url_for('tasks', status=status_filter, page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
+        <span class="btn btn-light border-0 disabled text-dark fw-bold font-monospace px-4">{{ pagination.page }} / {{ pagination.pages }}</span>
+        <a href="{{ url_for('tasks', status=status_filter, page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
+    </div>
+</div>
+{% endif %}
+
+<button class="fab" data-bs-toggle="modal" data-bs-target="#addTaskModal"><i class="bi bi-plus-lg"></i></button>
+
+<div class="modal fade" id="addTaskModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered mx-3">
+        <form class="modal-content border-0 rounded-4" method="POST" action="/task/add">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold">新增任务</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="text" name="name" class="form-control bg-light border-0 p-3 mb-3 rounded-3" placeholder="任务名称" required>
+                <input type="text" name="command" class="form-control bg-light border-0 p-3 mb-3 rounded-3 font-monospace" placeholder="执行指令 (如 test.py)" required>
+                <input type="text" name="cron" class="form-control bg-light border-0 p-3 mb-2 rounded-3 font-monospace" value="0 9 * * *" required>
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保 存</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const socket = io();
+    let activeTerminalId = null;
+
+    function toggleTerminal(id) {
+        const termBox = document.getElementById(`term-${id}`);
+        const termBody = document.getElementById(`term-body-${id}`);
+        
+        if (termBox.classList.contains('open')) {
+            termBox.classList.remove('open');
+            if(activeTerminalId === id) activeTerminalId = null;
+        } else {
+            termBox.classList.add('open');
+            activeTerminalId = id;
+            termBody.innerText = 'Connecting...\n';
+            fetch(`/api/task/log/${id}`).then(r=>r.json()).then(d=>{ 
+                if(activeTerminalId === id) {
+                    termBody.innerText = d.content.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+                    termBody.scrollTop = termBody.scrollHeight; 
+                }
+            });
+        }
+    }
+
+    function runTask(id) {
+        const termBox = document.getElementById(`term-${id}`);
+        const item = document.getElementById(`item-${id}`);
+        if (!item.classList.contains('expanded')) { item.classList.add('expanded'); }
+        if(!termBox.classList.contains('open')) { toggleTerminal(id); }
+        
+        document.getElementById(`term-body-${id}`).innerText = '执行中...\n';
+        fetch(`/api/task/run/${id}`).then(r=>r.json());
+    }
+
+    function stopTask(id) {
+        window.sysConfirm('确认停止？', () => fetch(`/api/task/stop/${id}`));
+    }
+
+    socket.on('log_stream', function(msg) {
+        if(activeTerminalId == msg.task_id) {
+            const body = document.getElementById(`term-body-${msg.task_id}`);
+            if(!body) return;
+            if(msg.clear) body.innerText = '';
+            body.innerText += msg.data.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+            body.scrollTop = body.scrollHeight;
+        }
+    });
+
+    socket.on('task_status', function(msg) {
+        const id = msg.task_id;
+        const ring = document.getElementById(`ring-${id}`);
+        const quickWrap = document.getElementById(`quick-action-${id}`);
+        if(!ring || !quickWrap) return;
+        
+        if(msg.status === 'Running') {
+            ring.className = 'status-ring running';
+            quickWrap.innerHTML = `<button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask(${id})"><i class="bi bi-stop-fill"></i></button>`;
+        } else {
+            ring.className = msg.status === 'Idle' ? 'status-ring idle' : 'status-ring error';
+            quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
+            setTimeout(()=> location.reload(), 1500); 
+        }
+    });
+</script>
+{% endblock %}

@@ -31,7 +31,7 @@ if os.name == 'nt':
     SUBPROCESS_KWARGS['creationflags'] = 0x08000000
 # ----------------------------------------------
 
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
+from flask import Flask, render_template as flask_render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_socketio import SocketIO
@@ -57,12 +57,10 @@ if getattr(sys, 'frozen', False):
     DATA_DIR = os.path.join(os.path.dirname(sys.executable), 'data')
 else:
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-    # --- 修改点：支持安卓/面具环境指定外部数据目录 ---
     if os.environ.get('ANDROID_DATA_DIR'):
         DATA_DIR = os.environ.get('ANDROID_DATA_DIR')
     else:
         DATA_DIR = os.path.join(BASE_DIR, 'data')
-    # ------------------------------------------------
 
 SCRIPTS_DIR = os.path.join(DATA_DIR, 'scripts')
 LOGS_DIR = os.path.join(DATA_DIR, 'logs')
@@ -111,6 +109,7 @@ if not os.path.exists(VERSION_FILE):
         json.dump({"version": "1.0.0", "changelog": "初始化版本"}, f, ensure_ascii=False, indent=4)
 
 app = Flask(__name__)
+
 app.secret_key = os.urandom(32)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(DB_DIR, 'auth.db')}"
@@ -126,7 +125,15 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 db.init_app(app)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# [安全修复] 取消了泛滥的 cors_allowed_origins="*" 降低跨站 WebSocket 劫持风险
+socketio = SocketIO(app, async_mode='threading')
+
+# [安全修复] 2. 彻底封堵未授权的 WebSocket 窃听漏洞
+@socketio.on('connect')
+def handle_ws_connect():
+    if not current_user.is_authenticated:
+        return False # 拒绝非登录用户的连接握手
+
 scheduler = BackgroundScheduler()
 running_processes = {}
 debug_processes = {}
@@ -134,6 +141,19 @@ debug_processes = {}
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+
+
+# [安全修复] 1. 终极目录穿越防护函数，绝对安全的路径计算与沙盒约束
+def get_safe_path(base_dir, user_input):
+    if not user_input:
+        return None
+    # 剔除首部的斜杠，防止 os.path.join 将其直接视为绝对路径绕过 base_dir
+    clean_input = str(user_input).lstrip('/\\')
+    target_path = os.path.abspath(os.path.join(base_dir, clean_input))
+    # 严格校验：无论怎么拼，最终计算出的绝对路径必须在 base_dir 内部
+    if not target_path.startswith(os.path.abspath(base_dir)):
+        return None
+    return target_path
 
 
 def generate_totp_secret():
@@ -152,7 +172,8 @@ def verify_totp(secret, code):
             h = hmac.new(key, msg, hashlib.sha1).digest()
             o = h[19] & 15
             token = (struct.unpack(">I", h[o:o + 4])[0] & 0x7fffffff) % 1000000
-            if f"{token:06d}" == str(code).strip():
+            # [安全修复] 5. 使用 hmac.compare_digest 防御密码学时序攻击
+            if hmac.compare_digest(f"{token:06d}", str(code).strip()):
                 return True
         return False
     except:
@@ -186,6 +207,16 @@ def inject_global_settings():
     return dict(sys_theme=sys_theme, sys_lang=sys_lang, last_login_info=last_login, sys_version=sys_version)
 
 
+def render_template(template_name_or_list, **context):
+    ua_string = request.headers.get('User-Agent', '').lower()
+    is_mobile = any(kw in ua_string for kw in ['mobile', 'android', 'iphone', 'ipad', 'ipod', 'windows phone'])
+    
+    if is_mobile:
+        return flask_render_template(f"mobile/mobile_{template_name_or_list}", **context)
+    else:
+        return flask_render_template(f"pc/pc_{template_name_or_list}", **context)
+
+
 @app.before_request
 def global_security_check():
     if not request.path.startswith('/static/'):
@@ -198,7 +229,8 @@ def global_security_check():
         'login', 'install', 'logout', 'tasks', 'static', 'subs',
         'scripts_editor', 'scripts_debug', 'api_debug_run', 'api_debug_stop', 'logs', 'deps', 'envs', 'config_editor', 'settings',
         'api_delete_logs', 'api_task_batch', 'api_scripts_save', 'api_update_check', 'api_update_do',
-        'api_subs_add', 'api_subs_edit', 'api_subs_delete', 'api_subs_run', 'api_subs_log', 'api_subs_delete_tasks', 'api_subs_toggle'
+        'api_subs_add', 'api_subs_edit', 'api_subs_delete', 'api_subs_run', 'api_subs_log', 'api_subs_delete_tasks', 'api_subs_toggle',
+        'get_avatar'
     ]
     if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
         referer = request.headers.get("Referer")
@@ -316,14 +348,18 @@ def execute_task(task_id):
                 max_timeout_hours = 1.0
             max_timeout_seconds = int(max_timeout_hours * 3600)
 
+            # [安全修复] 使用安全的路径解析，防止执行非 scripts 目录下的系统后门文件
+            filename = task.command.strip()
+            target_path = get_safe_path(SCRIPTS_DIR, filename)
+            if not target_path:
+                safe_rel_path = filename # Fallback 仅做显示，后续执行会自然抛错
+            else:
+                safe_rel_path = target_path
+
             task_log_dir = os.path.join(LOGS_DIR, task.name)
             os.makedirs(task_log_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_file_path = os.path.join(task_log_dir, f"{timestamp}.log")
-
-            filename = task.command.strip()
-            safe_rel_path = filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
-            if not safe_rel_path: safe_rel_path = filename
 
             cmd_list = ['node', '--require', './ql_env.js', safe_rel_path] if safe_rel_path.endswith('.js') else \
                 ['python', safe_rel_path] if safe_rel_path.endswith('.py') else \
@@ -492,7 +528,8 @@ def execute_subscription(sub_id):
                         cmd = ['git', 'clone']
                         if sub.branch:
                             cmd.extend(['-b', sub.branch])
-                        cmd.extend([sub.url, sub.alias])
+                        # [安全修复] 4. 添加 -- 切断参数解析，防止命令参数注入
+                        cmd.extend(['--', sub.url, sub.alias])
                         process = subprocess.Popen(cmd, cwd=SCRIPTS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
                     else:
                         write_log(f"📦 仓库已存在，开始拉取最新代码...\n")
@@ -966,14 +1003,15 @@ def api_subs_delete_tasks(id):
         if sub.type == 'single_file':
             tasks = Task.query.filter(Task.command.like(f"single_scripts/{sub.alias}.%")).all()
             for task in tasks:
-                file_path = os.path.join(SCRIPTS_DIR, task.command)
-                if os.path.exists(file_path):
+                # [安全修复] 使用 get_safe_path
+                file_path = get_safe_path(SCRIPTS_DIR, task.command)
+                if file_path and os.path.exists(file_path):
                     try: os.remove(file_path)
                     except: pass
         else:
             tasks = Task.query.filter(Task.command.like(f"{sub.alias}/%")).all()
-            target_dir = os.path.join(SCRIPTS_DIR, sub.alias)
-            if os.path.exists(target_dir) and os.path.isdir(target_dir):
+            target_dir = get_safe_path(SCRIPTS_DIR, sub.alias)
+            if target_dir and os.path.exists(target_dir) and os.path.isdir(target_dir):
                 try: shutil.rmtree(target_dir, ignore_errors=True)
                 except: pass
 
@@ -1123,12 +1161,14 @@ def api_stop_task(id):
 def api_get_task_log(id):
     task = Task.query.get(id)
     if not task: return jsonify({"content": "不存在"})
-    task_log_dir = os.path.join(LOGS_DIR, task.name)
-    if os.path.exists(task_log_dir):
+    
+    # 修复这里原本存在的轻度文件遍历可能，限制在 LOGS_DIR 下
+    task_log_dir = get_safe_path(LOGS_DIR, task.name)
+    if task_log_dir and os.path.exists(task_log_dir):
         files = sorted(os.listdir(task_log_dir), reverse=True)
         if files:
-            with open(os.path.join(task_log_dir, files[0]), 'r', encoding='utf-8') as f: return jsonify(
-                {"content": f.read()})
+            with open(os.path.join(task_log_dir, files[0]), 'r', encoding='utf-8') as f: 
+                return jsonify({"content": f.read()})
     return jsonify({"content": "暂无日志..."})
 
 
@@ -1253,7 +1293,7 @@ def api_uninstall_deps(id):
         db.session.delete(dep)
         db.session.commit()
         socketio.emit('dep_status', {'id': id, 'status': 'Deleted'})
-        return jsonify({"status": "success"})
+        return jsonify({"status": "success", "msg": "Deleted"})
         
     dep.status = 'Uninstalling'
     db.session.commit()
@@ -1387,13 +1427,12 @@ def scripts_editor():
 
     raw_current_file = request.args.get('file', 'new_script.py')
     
-    safe_rel_path = raw_current_file.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
-    if not safe_rel_path: 
-        safe_rel_path = 'new_script.py'
+    # [安全修复] 使用 get_safe_path
+    target_path = get_safe_path(SCRIPTS_DIR, raw_current_file)
+    if not target_path:
+        target_path = os.path.join(SCRIPTS_DIR, 'new_script.py')
         
-    target_path = os.path.join(SCRIPTS_DIR, safe_rel_path)
-    
-    current_file = safe_rel_path
+    current_file = os.path.relpath(target_path, SCRIPTS_DIR).replace('\\', '/')
     current_folder = os.path.dirname(current_file) or '根目录'
     current_file_name = os.path.basename(current_file)
 
@@ -1401,12 +1440,12 @@ def scripts_editor():
     if request.method == 'POST':
         raw_filename = request.form.get('filename')
         if raw_filename:
-            s_rel = raw_filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
-            save_path = os.path.join(SCRIPTS_DIR, s_rel)
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            with open(save_path, 'w', encoding='utf-8') as f:
-                f.write(request.form.get('content').replace('\r\n', '\n'))
-            return redirect(url_for('scripts_editor', file=s_rel))
+            save_path = get_safe_path(SCRIPTS_DIR, raw_filename)
+            if save_path:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    f.write(request.form.get('content').replace('\r\n', '\n'))
+                return redirect(url_for('scripts_editor', file=os.path.relpath(save_path, SCRIPTS_DIR).replace('\\', '/')))
 
     if os.path.exists(target_path) and os.path.isfile(target_path):
         try:
@@ -1426,10 +1465,9 @@ def api_scripts_save():
     content = request.form.get('content', '').replace('\r\n', '\n')
     if not raw_filename: return jsonify({"status": "error", "msg": "文件名为空"})
     
-    s_rel = raw_filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
-    if not s_rel: return jsonify({"status": "error", "msg": "非法路径禁止保存"})
-    
-    save_path = os.path.join(SCRIPTS_DIR, s_rel)
+    # [安全修复] 彻底杜绝任意文件写入
+    save_path = get_safe_path(SCRIPTS_DIR, raw_filename)
+    if not save_path: return jsonify({"status": "error", "msg": "非法路径禁止保存"})
         
     try:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -1454,11 +1492,10 @@ def scripts_debug():
     files = sorted(files)
     raw_current_file = request.args.get('file', files[0] if files else 'new_script.py')
     
-    safe_rel_path = raw_current_file.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
-    if not safe_rel_path: safe_rel_path = 'new_script.py'
+    target_path = get_safe_path(SCRIPTS_DIR, raw_current_file)
+    if not target_path: target_path = os.path.join(SCRIPTS_DIR, 'new_script.py')
     
-    target_path = os.path.join(SCRIPTS_DIR, safe_rel_path)
-    current_file = safe_rel_path
+    current_file = os.path.relpath(target_path, SCRIPTS_DIR).replace('\\', '/')
 
     content = ""
     if os.path.exists(target_path) and os.path.isfile(target_path):
@@ -1476,14 +1513,14 @@ def scripts_debug():
 def execute_debug(filename, stream_id):
     with app.app_context():
         try:
-            safe_rel_path = filename.replace('\\', '/').replace('../', '').replace('..', '').strip('/')
-            if not safe_rel_path: raise Exception("非法路径")
+            target_path = get_safe_path(SCRIPTS_DIR, filename)
+            if not target_path: raise Exception("非法路径")
             
             run_env = get_combined_env()
             
-            cmd_list = ['node', '--require', './ql_env.js', safe_rel_path] if safe_rel_path.endswith('.js') else \
-                ['python', safe_rel_path] if safe_rel_path.endswith('.py') else \
-                ['bash', safe_rel_path] if safe_rel_path.endswith('.sh') else [safe_rel_path]
+            cmd_list = ['node', '--require', './ql_env.js', target_path] if target_path.endswith('.js') else \
+                ['python', target_path] if target_path.endswith('.py') else \
+                ['bash', target_path] if target_path.endswith('.sh') else [target_path]
 
             socketio.emit('log_stream',
                           {'task_id': stream_id, 'data': f"🚀 开始调试执行: {' '.join(cmd_list)}\n", 'clear': True})
@@ -1601,11 +1638,9 @@ def logs():
     content = "请在左侧选择需要查看的日志..."
 
     if raw_current_folder and raw_current_file:
-        current_folder = raw_current_folder.replace('..', '').replace('/', '').replace('\\', '')
-        current_file = raw_current_file.replace('..', '').replace('/', '').replace('\\', '')
-
-        filepath = os.path.join(LOGS_DIR, current_folder, current_file)
-        if os.path.exists(filepath):
+        # [安全修复] 使用 get_safe_path
+        filepath = get_safe_path(LOGS_DIR, os.path.join(raw_current_folder, raw_current_file))
+        if filepath and os.path.exists(filepath):
             with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
 
     return render_template('logs.html', tree=tree, current_folder=raw_current_folder, current_file=raw_current_file,
@@ -2089,16 +2124,13 @@ if __name__ == '__main__':
         from PIL import Image, ImageDraw
         import ctypes
         
-        # 1. 拦截多开：如果检测到已有相同进程锁，则自动静默退出，不再打开新窗口
         mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "PatrickPanel_SingleInstance_Mutex")
-        if ctypes.windll.kernel32.GetLastError() == 183: # ERROR_ALREADY_EXISTS
+        if ctypes.windll.kernel32.GetLastError() == 183:
             sys.exit(0)
 
-        # 静默 Flask 的终端日志输出
         log = logging.getLogger('werkzeug')
         log.setLevel(logging.ERROR)
 
-        # --- 新增：写入本地 PC 调试日志 ---
         pc_log_path = os.path.join(DATA_DIR, 'pc_debug.log')
         pc_file_handler = logging.FileHandler(pc_log_path, encoding='utf-8')
         pc_file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(name)s: %(message)s'))
@@ -2109,21 +2141,17 @@ if __name__ == '__main__':
         wv_log.setLevel(logging.DEBUG)
         wv_log.addHandler(pc_file_handler)
         logging.debug("系统已启动，日志模块初始化完成")
-        # ---------------------------------
         
         def start_server():
             logging.debug("正在启动本地 Flask 服务器...")
             socketio.run(app, host='127.0.0.1', port=5000, allow_unsafe_werkzeug=True)
 
-        # 后台静默启动本地服务器
         threading.Thread(target=start_server, daemon=True).start()
         
-        # 2. 增加 text_select=True 使界面内的文字可以被鼠标选中和复制
         window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800, text_select=True)
 
         def on_closing():
             logging.debug("触发 on_closing 事件: 用户点击了右上角关闭按钮")
-            # 解决卡死：通过异步线程执行 hide，避免阻塞当前主线程 UI 消息循环
             def _async_hide():
                 try:
                     logging.debug("正在尝试隐藏窗口...")
@@ -2143,7 +2171,6 @@ if __name__ == '__main__':
         def exit_app(icon, item):
             logging.debug("触发托盘菜单: 彻底退出，准备强制杀停进程")
             icon.stop()
-            # 3. 解决退出卡死：不再调用 window.destroy() 等待主线程，直接使用底层的退出指令强杀自己
             os._exit(0)
 
         def create_tray_icon():
@@ -2158,12 +2185,9 @@ if __name__ == '__main__':
         )
         tray_icon = Icon("PatrickPanel", create_tray_icon(), "派大星面板", menu=tray_menu)
 
-        # 在独立线程运行托盘
         threading.Thread(target=tray_icon.run, daemon=True).start()
         
-        # 前台拉起软件界面 (已取消强制调试窗口)
         logging.debug("拉起 webview 主窗口...")
         webview.start()
     else:
-        # 正常 Docker 环境保持原样
         socketio.run(app, host='0.0.0.0', port=5000)

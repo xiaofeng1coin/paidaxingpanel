@@ -1,0 +1,66 @@
+<!-- mobile_debug.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}系统调试{% endblock %}
+
+{% block header_actions %}
+<a href="/settings"><i class="bi bi-x-lg text-dark" style="font-size: 20px;"></i></a>
+{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_debug.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="accordion-list">
+    <!-- 环境变量检测 -->
+    <div class="list-item">
+        <div class="item-row" data-bs-toggle="collapse" data-bs-target="#panel-env">
+            <div class="item-name"><i class="bi bi-info-square me-2 text-primary"></i>系统环境诊断</div>
+            <i class="bi bi-chevron-down item-icon"></i>
+        </div>
+        <div class="collapse detail-panel" id="panel-env">
+            <button class="btn-action" onclick="fetchDebug('/api/debug/env', 'out-env')">执行环境扫描</button>
+            <pre class="debug-output" id="out-env" style="display:none;"></pre>
+        </div>
+    </div>
+
+    <!-- 网络连通性测试 -->
+    <div class="list-item">
+        <div class="item-row" data-bs-toggle="collapse" data-bs-target="#panel-net">
+            <div class="item-name"><i class="bi bi-wifi me-2 text-success"></i>网络连通性测试</div>
+            <i class="bi bi-chevron-down item-icon"></i>
+        </div>
+        <div class="collapse detail-panel" id="panel-net">
+            <button class="btn-action" onclick="fetchDebug('/api/debug/net', 'out-net')">Ping Github & NPM</button>
+            <pre class="debug-output" id="out-net" style="display:none;"></pre>
+        </div>
+    </div>
+
+    <!-- 进程管理 -->
+    <div class="list-item">
+        <div class="item-row" data-bs-toggle="collapse" data-bs-target="#panel-ps">
+            <div class="item-name"><i class="bi bi-cpu me-2 text-danger"></i>僵尸进程清理</div>
+            <i class="bi bi-chevron-down item-icon"></i>
+        </div>
+        <div class="collapse detail-panel" id="panel-ps">
+            <button class="btn-action" style="background:#ef4444;" onclick="if(confirm('警告：这会终止所有运行中的任务！')) fetchDebug('/api/debug/killall', 'out-ps')">一键结束所有任务</button>
+            <pre class="debug-output" id="out-ps" style="display:none;"></pre>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function fetchDebug(url, outId) {
+        const outBox = document.getElementById(outId);
+        outBox.style.display = 'block';
+        outBox.innerText = 'Requesting diagnostic data...\n';
+        fetch(url).then(r => r.json()).then(d => {
+            outBox.innerText += (d.data || d.msg || 'Done.');
+        }).catch(e => {
+            outBox.innerText += '\nError: ' + e;
+        });
+    }
+</script>
+{% endblock %}

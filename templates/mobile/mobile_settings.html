@@ -1,0 +1,134 @@
+<!-- mobile_settings.html -->
+{% extends 'mobile/mobile_base.html' %}
+{% block title %}系统设置{% endblock %}
+
+{% block styles %}
+<link href="{{ url_for('static', filename='css/mobile/mobile_settings.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="setting-group">
+    <a href="#" class="setting-item" data-bs-toggle="modal" data-bs-target="#securityModal">
+        <div><i class="bi bi-shield-lock item-icon text-primary"></i> 账号安全</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
+    <a href="#" class="setting-item" data-bs-toggle="modal" data-bs-target="#notifyModal">
+        <div><i class="bi bi-bell item-icon text-warning"></i> 消息推送</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
+</div>
+
+<div class="setting-group">
+    <a href="/deps?type=npm" class="setting-item">
+        <div><i class="bi bi-box-seam item-icon text-success"></i> 依赖管理</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
+    <a href="/config" class="setting-item">
+        <div><i class="bi bi-file-earmark-code item-icon text-dark"></i> 全局配置</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
+    <a href="/logs" class="setting-item">
+        <div><i class="bi bi-terminal item-icon text-secondary"></i> 系统日志</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
+</div>
+
+<div class="setting-group">
+    <a href="/api/settings/backup" class="setting-item">
+        <div><i class="bi bi-cloud-download item-icon text-info"></i> 数据备份</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
+    <a href="#" class="setting-item" onclick="checkUpdate()">
+        <div><i class="bi bi-arrow-repeat item-icon text-danger"></i> 检查更新</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
+</div>
+
+<!-- 安全弹窗 -->
+<div class="modal fade" id="securityModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered mx-3">
+        <form class="modal-content border-0 rounded-4" method="POST" action="/settings/security">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold">账号安全</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="text-muted small mb-1 fw-bold">用户名</label>
+                <input type="text" name="username" class="tech-input font-monospace" value="{{ current_user.username }}" required>
+                <label class="text-muted small mb-1 fw-bold mt-2">密码 (留空表示不修改)</label>
+                <input type="password" name="password" class="tech-input font-monospace" placeholder="新密码">
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保存配置</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 通知弹窗 (修正后端绑定的键名) -->
+<div class="modal fade" id="notifyModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable mx-3">
+        <form class="modal-content border-0 rounded-4" method="POST" action="/settings/config">
+            <input type="hidden" name="tab" value="security">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold">消息推送</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <select name="notify_type" class="tech-input fw-bold" id="notify_type" onchange="toggleNotify()">
+                    <option value="none" {% if config.get('notify_type') == 'none' %}selected{% endif %}>关闭推送</option>
+                    <option value="telegram" {% if config.get('notify_type', '') | lower == 'telegram' %}selected{% endif %}>Telegram</option>
+                    <option value="dingtalk" {% if config.get('notify_type', '') | lower == 'dingtalk' %}selected{% endif %}>钉钉机器人</option>
+                    <option value="pushplus" {% if config.get('notify_type', '') | lower == 'pushplus' %}selected{% endif %}>Push Plus</option>
+                    <option value="serverchan" {% if config.get('notify_type', '') | lower == 'serverchan' %}selected{% endif %}>Server酱</option>
+                    <option value="wxpusher" {% if config.get('notify_type', '') | lower == 'wxpusher' %}selected{% endif %}>WxPusher</option>
+                </select>
+                
+                <div id="notify-params" style="display: none; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid var(--border);">
+                    <div class="tg-param mb-2">
+                        <input type="text" name="TG_BOT_TOKEN" class="tech-input font-monospace" placeholder="TG_BOT_TOKEN" value="{{ config.get('TG_BOT_TOKEN', '') }}">
+                        <input type="text" name="TG_USER_ID" class="tech-input font-monospace mb-0" placeholder="TG_USER_ID" value="{{ config.get('TG_USER_ID', '') }}">
+                    </div>
+                    <div class="dt-param mb-2">
+                        <input type="text" name="DD_BOT_TOKEN" class="tech-input font-monospace" placeholder="DD_BOT_TOKEN" value="{{ config.get('DD_BOT_TOKEN', '') }}">
+                        <input type="text" name="DD_BOT_SECRET" class="tech-input font-monospace mb-0" placeholder="DD_BOT_SECRET" value="{{ config.get('DD_BOT_SECRET', '') }}">
+                    </div>
+                    <div class="pp-param mb-2">
+                        <input type="text" name="PUSH_PLUS_TOKEN" class="tech-input font-monospace mb-0" placeholder="PUSH_PLUS_TOKEN" value="{{ config.get('PUSH_PLUS_TOKEN', '') }}">
+                    </div>
+                    <div class="sc-param mb-2">
+                        <input type="text" name="PUSH_KEY" class="tech-input font-monospace mb-0" placeholder="PUSH_KEY" value="{{ config.get('PUSH_KEY', '') }}">
+                    </div>
+                    <!-- 重点修复：使用 WXPUSHER_APP_TOKEN 和 WXPUSHER_UID 对齐 app.py -->
+                    <div class="wx-param mb-2">
+                        <input type="text" name="WXPUSHER_APP_TOKEN" class="tech-input font-monospace" placeholder="WXPUSHER_APP_TOKEN" value="{{ config.get('WXPUSHER_APP_TOKEN', '') }}">
+                        <input type="text" name="WXPUSHER_UID" class="tech-input font-monospace mb-0" placeholder="WXPUSHER_UID" value="{{ config.get('WXPUSHER_UID', '') }}">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保存配置</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function toggleNotify() {
+        const type = document.getElementById('notify_type').value.toLowerCase();
+        const paramsDiv = document.getElementById('notify-params');
+        if (type === 'none') { paramsDiv.style.display = 'none'; } 
+        else {
+            paramsDiv.style.display = 'block';
+            document.querySelectorAll('.tg-param').forEach(el => el.style.display = type === 'telegram' ? 'block' : 'none');
+            document.querySelectorAll('.dt-param').forEach(el => el.style.display = type === 'dingtalk' ? 'block' : 'none');
+            document.querySelectorAll('.pp-param').forEach(el => el.style.display = type === 'pushplus' ? 'block' : 'none');
+            document.querySelectorAll('.sc-param').forEach(el => el.style.display = type === 'serverchan' ? 'block' : 'none');
+            document.querySelectorAll('.wx-param').forEach(el => el.style.display = type === 'wxpusher' ? 'block' : 'none');
+        }
+    }
+    toggleNotify();
+</script>
+{% endblock %}
