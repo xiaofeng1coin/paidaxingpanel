@@ -126,7 +126,8 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 db.init_app(app)
 
 # [安全修复] 取消了泛滥的 cors_allowed_origins="*" 降低跨站 WebSocket 劫持风险
-socketio = SocketIO(app, async_mode='threading')
+# [兼容修复] 添加 manage_session=False 解决 Flask 3.x 带来的 RequestContext 无 setter 的报错
+socketio = SocketIO(app, async_mode='threading', manage_session=False)
 
 # [安全修复] 2. 彻底封堵未授权的 WebSocket 窃听漏洞
 @socketio.on('connect')
