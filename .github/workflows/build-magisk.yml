@@ -60,6 +60,16 @@ jobs:
         # 使用 xz 进行极限压缩，大幅度减小面具模块体积
         xz -z -9 -T0 rootfs.tar
 
+    - name: Extract Version and Changelog
+      id: get_meta
+      run: |
+        # 读取 version.json 中的版本号和更新日志
+        VERSION=$(jq -r .version version.json)
+        echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+        
+        # 将更新日志导出到文本文件，解决多行文本格式问题
+        jq -r .changelog version.json > release_body.txt
+
     - name: Create Magisk Module Structure
       run: |
         mkdir magisk_module
@@ -68,12 +78,12 @@ jobs:
         # 1. 移动根文件系统
         mv ../rootfs.tar.xz ./
         
-        # 2. 创建 module.prop
-        cat << 'EOF' > module.prop
+        # 2. 创建 module.prop (动态注入版本号)
+        cat << EOF > module.prop
         id=patrick_panel
         name=派大星面板 (PatrickPanel)
-        version=v1.0.7
-        versionCode=107
+        version=v${{ env.APP_VERSION }}
+        versionCode=${APP_VERSION//./}
         author=xiaofeng1coin
         description=支持Python3/Nodejs的定时任务面板。Data目录位于内部存储根目录下的 PatrickPanel_Data 文件夹。
         EOF
@@ -123,14 +133,13 @@ jobs:
         mount -o bind "$PUBLIC_DATA_DIR" "$MODDIR/alpine/app/data"
         
         # 修复 Android 侧组权限问题，使 chroot 内的 root 拥有网络权限
-        # Android inet 组为 3003
         export ANDROID_DATA_DIR=/app/data
         
         # 使用 chroot 进入环境并后台启动面板，改用 gunicorn 确保多线程正常且绑定到 0.0.0.0
         chroot "$MODDIR/alpine" /bin/sh -c "
             export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             export ANDROID_DATA_DIR=/app/data
-            # 为 root 增加 inet 组权限 (如果不受支持将静默失败，但这通常能解决 Socket 绑定问题)
+            # 为 root 增加 inet 组权限
             addgroup -g 3003 inet 2>/dev/null
             addgroup root inet 2>/dev/null
             cd /app
@@ -145,13 +154,15 @@ jobs:
     - name: Zip Magisk Module
       run: |
         cd magisk_module
-        zip -r9 ../PatrickPanel-Magisk-v1.0.7.zip .
+        # 动态打包为带有中文和版本号的文件名
+        zip -r9 "../派大星面板-面具模块-v${{ env.APP_VERSION }}.zip" .
 
     - name: Publish to Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: Magisk-v1.0.7
-        name: 派大星面板 面具模块 v1.0.7
-        files: 派大星面板-Magisk-v1.0.7.zip
+        tag_name: v${{ env.APP_VERSION }}
+        name: 派大星面板 v${{ env.APP_VERSION }}
+        body_path: release_body.txt
+        files: 派大星面板-面具模块-v${{ env.APP_VERSION }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -7,7 +7,6 @@ on:
     branches:
       - master
 
-# 修复：显式声明操作仓库内容(创建 Release)的写入权限
 permissions:
   contents: write
 
@@ -34,18 +33,31 @@ jobs:
       run: |
         pyinstaller package.spec
 
-    - name: Get Version from version.json
-      id: get_version
+    - name: Extract Version and Changelog
+      id: get_meta
       run: |
-        $json = Get-Content version.json | ConvertFrom-Json
+        $json = Get-Content version.json -Raw | ConvertFrom-Json
         $version = $json.version
+        $changelog = $json.changelog
+        
         echo "APP_VERSION=$version" >> $env:GITHUB_ENV
+        # 写入正文文件，指定 UTF8 编码防止中文乱码
+        [IO.File]::WriteAllText("release_body.txt", $changelog, [System.Text.Encoding]::UTF8)
+
+    - name: Rename Executable to Chinese
+      run: |
+        # 获取 dist 目录下的所有 exe 文件（通常只有一个）
+        $exe = Get-ChildItem -Path dist\*.exe | Select-Object -First 1
+        if ($exe) {
+            Rename-Item -Path $exe.FullName -NewName "派大星面板-Windows-v${env:APP_VERSION}.exe"
+        }
 
     - name: Publish to Release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ env.APP_VERSION }}
         name: 派大星面板 v${{ env.APP_VERSION }}
-        files: dist/派大星面板.exe
+        body_path: release_body.txt
+        files: dist/派大星面板-Windows-v${{ env.APP_VERSION }}.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
