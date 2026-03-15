@@ -1801,7 +1801,10 @@ def api_update_do():
             if is_exe:
                 # ================= EXE 自动更新逻辑 =================
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🖥️ 检测到当前为 Windows EXE 环境，准备下载新版二进制文件...\n"})
-                exe_url = f"https://github.com/{repo}/releases/download/v{target_version}/PatrickPanel.exe"
+                
+                exe_filename = f"派大星面板-Windows-v{target_version}.exe"
+                exe_url = f"https://github.com/{repo}/releases/download/v{target_version}/{urllib.parse.quote(exe_filename)}"
+                
                 temp_dir = tempfile.mkdtemp()
                 new_exe_path = os.path.join(temp_dir, "PatrickPanel_New.exe")
                 
@@ -1830,10 +1833,13 @@ def api_update_do():
             elif is_magisk:
                 # ================= 面具(Magisk) 更新逻辑 =================
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': f"📱 检测到当前为安卓面具(Magisk)环境，正在下载模块包...\n"})
-                magisk_url = f"https://github.com/{repo}/releases/download/v{target_version}/PatrickPanel_Magisk.zip"
+                
+                magisk_filename = f"派大星面板-面具模块-v{target_version}.zip"
+                magisk_url = f"https://github.com/{repo}/releases/download/v{target_version}/{urllib.parse.quote(magisk_filename)}"
+                
                 download_dir = "/sdcard/Download"
                 os.makedirs(download_dir, exist_ok=True)
-                zip_path = os.path.join(download_dir, f"PatrickPanel_Update_v{target_version}.zip")
+                zip_path = os.path.join(download_dir, magisk_filename)
                 
                 req = urllib.request.Request(magisk_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=120) as res, open(zip_path, 'wb') as f:
