@@ -17,7 +17,7 @@
             </div>
             
             <div id="quick-action-{{ sub.id }}">
-                {% if sub.status != 'Running' and sub.is_disabled != 1 %}
+                {% if sub.status != 'Running' %}
                 <button class="btn-quick-run" onclick="event.stopPropagation(); runSub({{ sub.id }})"><i class="bi bi-cloud-download"></i></button>
                 {% else %}
                 <button class="btn-quick-run" disabled><i class="bi bi-hourglass-split"></i></button>

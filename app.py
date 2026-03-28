@@ -49,7 +49,7 @@ aps_logger = logging.getLogger('apscheduler')
 aps_logger.setLevel(logging.DEBUG)
 # ---------------------------------------------------
 
-from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog, Subscription
+from database import db, User, Task, Env, Dependency, LoginSecurity, SystemConfig, LoginLog, Subscription, TaskView
 
 # 核心修改：兼容 PyInstaller exe 环境与 Docker/源码/安卓面具环境
 if getattr(sys, 'frozen', False):
@@ -340,11 +340,227 @@ def get_combined_env():
     return run_env
 
 
-def execute_task(task_id):
+def normalize_python_package_name(pkg_name):
+    mapping = {
+        'bs4': 'beautifulsoup4',
+        'cv2': 'opencv-python',
+        'yaml': 'PyYAML',
+        'PIL': 'Pillow',
+        'Crypto': 'pycryptodome',
+        'OpenSSL': 'pyOpenSSL',
+        'sklearn': 'scikit-learn'
+    }
+    return mapping.get(pkg_name, pkg_name)
+
+
+def upsert_dependency_record(pkg_name, pkg_type, status):
+    dep = Dependency.query.filter_by(name=pkg_name, pkg_type=pkg_type).first()
+    if not dep:
+        dep = Dependency(name=pkg_name, pkg_type=pkg_type, status=status)
+        db.session.add(dep)
+    else:
+        dep.status = status
+    db.session.commit()
+    return dep
+
+
+def run_dependency_install_sync(pkg_name, pkg_type, log_writer=None):
+    try:
+        if pkg_type not in ['npm', 'pip']:
+            return False, "不支持的依赖类型"
+
+        if not pkg_name or not re.match(r'^[A-Za-z0-9_\-\.\@\/=]+$', pkg_name):
+            return False, "依赖名包含非法字符"
+
+        node_mirror = SystemConfig.query.filter_by(key='node_mirror').first()
+        python_mirror = SystemConfig.query.filter_by(key='python_mirror').first()
+
+        dep = upsert_dependency_record(pkg_name, pkg_type, 'Installing')
+        socketio.emit('dep_status', {'id': dep.id, 'status': dep.status})
+
+        dep_log_dir = os.path.join(LOGS_DIR, 'dependencies')
+        os.makedirs(dep_log_dir, exist_ok=True)
+        log_file_path = os.path.join(dep_log_dir, f"dep_{dep.id}_{dep.name}.log")
+
+        if pkg_type == 'npm':
+            run_cwd = NODE_DIR
+            cmd = f"npm install {pkg_name}"
+            if node_mirror and node_mirror.value:
+                cmd += f" --registry={node_mirror.value}"
+        else:
+            run_cwd = PYTHON_DIR
+            cmd = f"pip install --target={PYTHON_DIR} {pkg_name}"
+            if python_mirror and python_mirror.value:
+                cmd += f" -i {python_mirror.value}"
+
+        start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        start_msg = f"==============================================\n" \
+                    f"🚀 开始自动安装依赖 | 时间: {start_time_str}\n" \
+                    f"👉 依赖类型: {pkg_type}\n" \
+                    f"👉 依赖名称: {pkg_name}\n" \
+                    f"👉 执行指令: {cmd}\n" \
+                    f"==============================================\n\n"
+
+        if log_writer:
+            log_writer(start_msg)
+
+        with open(log_file_path, 'w', encoding='utf-8') as f:
+            f.write(start_msg)
+            f.flush()
+
+            process = subprocess.Popen(cmd, shell=True, env=get_combined_env(), stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, cwd=run_cwd, text=True, bufsize=1,
+                                       encoding='utf-8', errors='replace', **SUBPROCESS_KWARGS)
+            install_output = []
+            for line in process.stdout:
+                install_output.append(line)
+                f.write(line)
+                f.flush()
+                if log_writer:
+                    log_writer(line)
+            process.wait()
+
+            end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            end_msg = f"\n==============================================\n" \
+                      f"✅ 自动安装结束 | 时间: {end_time_str}\n" \
+                      f"🛑 退出码: {process.returncode}\n" \
+                      f"==============================================\n"
+            f.write(end_msg)
+            if log_writer:
+                log_writer(end_msg)
+
+        dep.status = 'Installed' if process.returncode == 0 else 'Error'
+        db.session.commit()
+        socketio.emit('dep_status', {'id': dep.id, 'status': dep.status})
+
+        if process.returncode == 0:
+            return True, ''.join(install_output)
+        return False, ''.join(install_output)
+    except Exception as e:
+        try:
+            dep = Dependency.query.filter_by(name=pkg_name, pkg_type=pkg_type).first()
+            if dep:
+                dep.status = 'Error'
+                db.session.commit()
+                socketio.emit('dep_status', {'id': dep.id, 'status': dep.status})
+        except:
+            pass
+        return False, str(e)
+
+
+def diagnose_task_issue(output_text, returncode, duration_seconds):
+    text = output_text or ""
+    text_lower = text.lower()
+
+    npm_match = re.search(r"cannot find module ['\"]([^'\"]+)['\"]", text, re.IGNORECASE)
+    if npm_match:
+        module_name = npm_match.group(1).strip()
+        if not module_name.startswith('./') and not module_name.startswith('../') and not module_name.startswith('/'):
+            return {
+                'type': 'node_missing_dep',
+                'title': f"检测到 Node.js 依赖缺失: {module_name}",
+                'package': module_name,
+                'pkg_type': 'npm',
+                'auto_fix': True,
+                'retriable': True,
+                'reason': "缺少 nodejs 依赖",
+                'solution': "系统将自动尝试安装该依赖并重跑脚本"
+            }
+        return {
+            'type': 'local_missing_file',
+            'title': f"检测到本地文件缺失: {module_name}",
+            'auto_fix': False,
+            'reason': "脚本同目录或者引用目录下缺少文件",
+            'solution': "方法1、重新拉库\n方法2、自己手动进入对应路径下补全缺少的文件"
+        }
+
+    py_match = re.search(r"ModuleNotFoundError:\s*No module named ['\"]([^'\"]+)['\"]", text, re.IGNORECASE)
+    if py_match:
+        module_name = py_match.group(1).strip()
+        real_pkg_name = normalize_python_package_name(module_name)
+        return {
+            'type': 'python_missing_dep',
+            'title': f"检测到 Python 依赖缺失: {module_name}",
+            'package': real_pkg_name,
+            'display_package': module_name,
+            'pkg_type': 'pip',
+            'auto_fix': True,
+            'retriable': True,
+            'reason': "缺少 python 依赖",
+            'solution': f"系统将自动尝试安装依赖 {real_pkg_name} 并重跑脚本；若仍失败，请查询该模块在 pip 中的真实包名"
+        }
+
+    if 'this.got.post is not a function' in text_lower or 'got.extend is not a function' in text_lower:
+        return {
+            'type': 'got_version_issue',
+            'title': "检测到 got 版本兼容问题",
+            'package': 'got@11',
+            'pkg_type': 'npm',
+            'auto_fix': True,
+            'retriable': True,
+            'reason': "新版 got 与旧脚本调用方式不兼容",
+            'solution': "系统将自动安装 got@11 并重跑脚本"
+        }
+
+    if returncode == 0 and duration_seconds < 1.5 and len(text.strip()) < 300:
+        github_related = False
+        with app.app_context():
+            try:
+                for e in Env.query.all():
+                    if e.name and 'github' in e.name.lower():
+                        github_related = True
+                        break
+            except:
+                pass
+        if github_related:
+            return {
+                'type': 'github_env_issue',
+                'title': "检测到疑似 github 变量导致脚本秒退",
+                'auto_fix': False,
+                'reason': "变量中存在名字中带有 github 的变量名",
+                'solution': "去环境变量或者配置文件中删除该变量即可，是整行删除，不是只删除变量值，目前常见于哔哩哔哩脚本中的 github 加速变量"
+            }
+
+    if 'ck' in text_lower and re.search(r'ck\s*[为=:：]?\s*0\b', text_lower):
+        return {
+            'type': 'env_name_wrong',
+            'title': "检测到脚本读取到 ck 为 0",
+            'auto_fix': False,
+            'reason': "变量名填写错了",
+            'solution': "填写正确的变量名"
+        }
+
+    if 'sendnotify' in text_lower or '通知' in text or 'pushplus' in text_lower or 'telegram' in text_lower:
+        if '未配置' in text or 'not configured' in text_lower or 'undefined' in text_lower:
+            return {
+                'type': 'notify_config_issue',
+                'title': "检测到通知配置可能缺失",
+                'auto_fix': False,
+                'reason': "脚本通知参数未配置或脚本内通知开关未开启",
+                'solution': "在配置文件中配置通知参数\n看脚本注释是否有通知开关，有的话根据注释填写变量将其打开\n更换其他脚本测试通知"
+            }
+
+    return None
+
+
+def write_diagnosis_message(write_log, diagnosis):
+    if not diagnosis:
+        return
+    msg = "\n" \
+          "================ 智能诊断报告 ================\n" \
+          f"🔍 诊断结果: {diagnosis.get('title', '未知问题')}\n" \
+          f"📌 可能原因: {diagnosis.get('reason', '-')}\n" \
+          f"🛠️ 建议处理:\n{diagnosis.get('solution', '-')}\n" \
+          "==============================================\n"
+    write_log(msg)
+
+
+def execute_task(task_id, ignore_disabled=False, retry_count=0):
     with app.app_context():
         try:
             task = Task.query.get(task_id)
-            if not task or getattr(task, 'is_disabled', 0) == 1: return
+            if not task: return
+            if getattr(task, 'is_disabled', 0) == 1 and not ignore_disabled: return
 
             start_time = time.time()
             start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -361,7 +577,7 @@ def execute_task(task_id):
             filename = task.command.strip()
             target_path = get_safe_path(SCRIPTS_DIR, filename)
             if not target_path:
-                safe_rel_path = filename # Fallback 仅做显示，后续执行会自然抛错
+                safe_rel_path = filename
             else:
                 safe_rel_path = target_path
 
@@ -381,15 +597,29 @@ def execute_task(task_id):
             start_msg = f"==============================================\n" \
                         f"🚀 项目开始执行 | 时间: {start_time_str}\n" \
                         f"👉 执行指令: {' '.join(cmd_list)}\n" \
+                        f"👉 自动诊断重试次数: {retry_count}\n" \
                         f"==============================================\n\n"
 
             socketio.emit('task_status', {'task_id': task.id, 'status': 'Running', 'last_run': task.last_run})
             socketio.emit('log_stream', {'task_id': task.id, 'data': start_msg, 'clear': True})
 
+            need_retry = False
+
             with open(log_file_path, 'w', encoding='utf-8') as f:
                 f.write(start_msg)
                 f.flush()
-                
+
+                def write_log(msg):
+                    f.write(msg)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except:
+                        pass
+                    socketio.emit('log_stream', {'task_id': task.id, 'data': msg})
+
+                full_output_parts = []
+
                 try:
                     process = subprocess.Popen(cmd_list, shell=False, env=run_env, stdout=subprocess.PIPE,
                                                stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
@@ -411,6 +641,7 @@ def execute_task(task_id):
                     threading.Thread(target=timeout_monitor, daemon=True).start()
 
                     for line in process.stdout:
+                        full_output_parts.append(line)
                         f.write(line)
                         f.flush()  
                         os.fsync(f.fileno())  
@@ -422,10 +653,42 @@ def execute_task(task_id):
                     
                 except Exception as proc_e:
                     err_trace = traceback.format_exc()
+                    full_output_parts.append(err_trace)
                     err_msg = f"\n[核心崩溃] 进程启动发生致命异常:\n{err_trace}\n"
                     f.write(err_msg)
                     socketio.emit('log_stream', {'task_id': task.id, 'data': err_msg})
                     returncode = -99
+
+                duration = round(time.time() - start_time, 2)
+                output_text = ''.join(full_output_parts)
+
+                diagnosis = diagnose_task_issue(output_text, returncode, duration)
+
+                if diagnosis:
+                    if diagnosis.get('auto_fix') and retry_count < 1:
+                        write_log("\n================ 智能诊断开始 ================\n")
+                        write_log(f"🔍 已识别问题: {diagnosis.get('title')}\n")
+                        write_log(f"📌 可能原因: {diagnosis.get('reason')}\n")
+                        write_log(f"🛠️ 自动修复: 准备安装依赖 {diagnosis.get('package')}\n")
+                        write_log("==============================================\n\n")
+
+                        install_ok, install_msg = run_dependency_install_sync(
+                            diagnosis.get('package'),
+                            diagnosis.get('pkg_type'),
+                            log_writer=write_log
+                        )
+
+                        if install_ok:
+                            write_log(f"\n✅ 自动修复成功，已安装依赖: {diagnosis.get('package')}\n")
+                            write_log("🔁 系统将自动重新运行一次该任务...\n")
+                            need_retry = True
+                        else:
+                            write_log(f"\n❌ 自动修复失败，依赖安装未成功: {diagnosis.get('package')}\n")
+                            if install_msg:
+                                write_log(f"📄 安装输出摘要:\n{install_msg[-2000:] if len(install_msg) > 2000 else install_msg}\n")
+                            write_diagnosis_message(write_log, diagnosis)
+                    else:
+                        write_diagnosis_message(write_log, diagnosis)
 
                 end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 end_msg = f"\n==============================================\n" \
@@ -436,16 +699,23 @@ def execute_task(task_id):
                 if (time.time() - start_time) < 1.5 and returncode == 0 and os.path.getsize(log_file_path) < 500:
                     end_msg += f"💡 [提示] 脚本瞬间执行完毕且无输出。可能原因：\n1. 面板环境变量(如 JD_COOKIE)缺失或被禁用。\n2. 脚本依赖的其他环境条件未满足而触发了静默 return。\n"
 
+                if need_retry:
+                    end_msg += "🤖 [智能修复] 已完成自动修复，准备进入自动重跑流程。\n"
+
                 f.write(end_msg)
                 socketio.emit('log_stream', {'task_id': task.id, 'data': end_msg})
 
-            duration = round(time.time() - start_time, 2)
             current_task = Task.query.get(task_id)
             if current_task and current_task.status == 'Running':
                 current_task.status = 'Idle'
                 current_task.last_duration = f"{duration}s"
                 db.session.commit()
                 socketio.emit('task_status', {'task_id': task.id, 'status': 'Idle', 'duration': f"{duration}s"})
+
+            if need_retry:
+                time.sleep(1)
+                execute_task(task_id, True, retry_count + 1)
+                return
 
         except Exception as e:
             err_trace = traceback.format_exc()
@@ -466,7 +736,7 @@ def parse_script_meta(filepath, default_name):
     try:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read(8192)
-            name_match = re.search(r'new\s+Env\([\'"](.*?)[\'"]\)', content)
+            name_match = re.search(r'new\s+Env$[\'"](.*?)[\'"]$', content)
             if name_match:
                 name = name_match.group(1)
             
@@ -479,11 +749,12 @@ def parse_script_meta(filepath, default_name):
         pass
     return name, cron
 
-def execute_subscription(sub_id):
+def execute_subscription(sub_id, ignore_disabled=False):
     with app.app_context():
         try:
             sub = Subscription.query.get(sub_id)
-            if not sub or getattr(sub, 'is_disabled', 0) == 1: return
+            if not sub: return
+            if getattr(sub, 'is_disabled', 0) == 1 and not ignore_disabled: return
 
             start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             stream_id = f"sub_{sub.id}"
@@ -537,7 +808,6 @@ def execute_subscription(sub_id):
                         cmd = ['git', 'clone']
                         if sub.branch:
                             cmd.extend(['-b', sub.branch])
-                        # [安全修复] 4. 添加 -- 切断参数解析，防止命令参数注入
                         cmd.extend(['--', sub.url, sub.alias])
                         process = subprocess.Popen(cmd, cwd=SCRIPTS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
                     else:
@@ -595,7 +865,7 @@ def execute_subscription(sub_id):
                     command = f"single_scripts/{f}" if sub.type == 'single_file' else f"{sub.alias}/{f}"
                     processed_commands.add(command)
                     
-                    script_name, script_cron = parse_script_meta(filepath, f)
+                    script_name, script_cron = parse_script_meta(filepath, os.path.splitext(os.path.basename(f))[0])
                     cron_to_use = script_cron if script_cron else (sub.cron if sub.cron else '0 0 * * *')
                     
                     if command in existing_commands:
@@ -607,15 +877,63 @@ def execute_subscription(sub_id):
                         if t.cron != cron_to_use:
                             t.cron = cron_to_use
                             updated = True
+                        if t.source_type != 'subscription':
+                            t.source_type = 'subscription'
+                            updated = True
+                        if t.source_key != sub.alias:
+                            t.source_key = sub.alias
+                            updated = True
+                        if t.source_name != sub.name:
+                            t.source_name = sub.name
+                            updated = True
                         if updated:
                             db.session.commit()
                             add_job_to_scheduler(t)
                             write_log(f"🔄 更新任务: {script_name} ({command})\n")
+
+                        task_view = TaskView.query.filter_by(source_key=sub.alias).first()
+                        if not task_view:
+                            max_order = db.session.query(db.func.max(TaskView.sort_order)).scalar() or 0
+                            db.session.add(TaskView(
+                                name=sub.name,
+                                source_key=sub.alias,
+                                source_type='subscription',
+                                is_visible=0,
+                                is_system=0,
+                                sort_order=max_order + 1
+                            ))
+                            db.session.commit()
+                        else:
+                            if task_view.name != sub.name:
+                                task_view.name = sub.name
+                                db.session.commit()
                     else:
                         if sub.auto_add == 1:
-                            new_t = Task(name=script_name, command=command, cron=cron_to_use, status='Idle')
+                            new_t = Task(
+                                name=script_name,
+                                command=command,
+                                cron=cron_to_use,
+                                status='Idle',
+                                source_type='subscription',
+                                source_key=sub.alias,
+                                source_name=sub.name
+                            )
                             db.session.add(new_t)
                             db.session.commit()
+
+                            task_view = TaskView.query.filter_by(source_key=sub.alias).first()
+                            if not task_view:
+                                max_order = db.session.query(db.func.max(TaskView.sort_order)).scalar() or 0
+                                db.session.add(TaskView(
+                                    name=sub.name,
+                                    source_key=sub.alias,
+                                    source_type='subscription',
+                                    is_visible=0,
+                                    is_system=0,
+                                    sort_order=max_order + 1
+                                ))
+                                db.session.commit()
+
                             add_job_to_scheduler(new_t)
                             write_log(f"➕ 新增任务: {script_name} ({command})\n")
 
@@ -882,14 +1200,27 @@ def tasks():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
     status_filter = request.args.get('status', 'all')
+    source_filter = request.args.get('source', 'all')
 
     query = Task.query
-    if status_filter == 'normal':
-        query = query.filter((Task.is_disabled == 0) | (Task.is_disabled == None))
-    elif status_filter == 'disabled':
-        query = query.filter(Task.is_disabled == 1)
+
+    if source_filter != 'all':
+        if source_filter == 'manual':
+            query = query.filter(Task.source_type == 'manual')
+        else:
+            query = query.filter(Task.source_key == source_filter)
+        status_filter = 'all'
+    else:
+        if status_filter == 'normal':
+            query = query.filter((Task.is_disabled == 0) | (Task.is_disabled == None))
+        elif status_filter == 'disabled':
+            query = query.filter(Task.is_disabled == 1)
+        source_filter = 'all'
 
     pagination = query.order_by(Task.is_disabled.asc(), Task.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+
+    source_views = TaskView.query.filter_by(is_visible=1).order_by(TaskView.sort_order.asc(), TaskView.id.asc()).all()
+    all_views = TaskView.query.order_by(TaskView.sort_order.asc(), TaskView.id.asc()).all()
 
     tz_str = os.environ.get('TZ', 'Asia/Shanghai')
 
@@ -908,8 +1239,37 @@ def tasks():
             except Exception:
                 task.next_run = "规则错误"
 
-    return render_template('tasks.html', pagination=pagination, status_filter=status_filter, per_page=per_page)
+    return render_template('tasks.html', pagination=pagination, status_filter=status_filter, source_filter=source_filter, per_page=per_page, source_views=source_views, all_views=all_views)
 
+@app.route('/api/task_views')
+@login_required
+def api_task_views():
+    views = TaskView.query.order_by(TaskView.sort_order.asc(), TaskView.id.asc()).all()
+    return jsonify({
+        "status": "success",
+        "data": [
+            {
+                "id": v.id,
+                "name": v.name,
+                "source_key": v.source_key,
+                "source_type": v.source_type,
+                "is_visible": v.is_visible,
+                "is_system": v.is_system
+            } for v in views
+        ]
+    })
+
+
+@app.route('/api/task_views/toggle/<int:id>', methods=['POST'])
+@login_required
+def api_task_views_toggle(id):
+    view = TaskView.query.get(id)
+    if not view:
+        return jsonify({"status": "error", "msg": "视图不存在"})
+
+    view.is_visible = 0 if view.is_visible == 1 else 1
+    db.session.commit()
+    return jsonify({"status": "success", "is_visible": view.is_visible})
 
 @app.route('/subs')
 @login_required
@@ -989,9 +1349,8 @@ def api_subs_toggle(id):
 @login_required
 def api_subs_run(id):
     sub = Subscription.query.get(id)
-    if not sub: return jsonify({"status": "error"})
-    if getattr(sub, 'is_disabled', 0) == 1: return jsonify({"status": "error", "msg": "该订阅已被禁用"})
-    threading.Thread(target=execute_subscription, args=(id,)).start()
+    if not sub: return jsonify({"status": "error", "msg": "订阅不存在"})
+    threading.Thread(target=execute_subscription, args=(id, True)).start()
     return jsonify({"status": "success"})
 
 @app.route('/api/subs/delete/<int:id>')
@@ -1048,9 +1407,22 @@ def api_subs_log(id):
 @login_required
 def add_task():
     new_task = Task(name=request.form.get('name'), command=request.form.get('command').strip(),
-                    cron=request.form.get('cron'), status='Idle')
+                    cron=request.form.get('cron'), status='Idle',
+                    source_type='manual', source_key='manual', source_name='单脚本')
     db.session.add(new_task);
     db.session.commit();
+
+    if not TaskView.query.filter_by(source_key='manual').first():
+        db.session.add(TaskView(
+            name='单脚本',
+            source_key='manual',
+            source_type='manual',
+            is_visible=0,
+            is_system=1,
+            sort_order=0
+        ))
+        db.session.commit()
+
     add_job_to_scheduler(new_task)
     return redirect(url_for('tasks'))
 
@@ -1120,8 +1492,8 @@ def api_task_batch():
             if scheduler.get_job(f"task_{task.id}"): 
                 scheduler.remove_job(f"task_{task.id}")
         elif action == 'run':
-            if getattr(task, 'is_disabled', 0) == 0 and task_id not in running_processes:
-                threading.Thread(target=execute_task, args=(task_id,)).start()
+            if task_id not in running_processes:
+                threading.Thread(target=execute_task, args=(task_id, True)).start()
         elif action == 'delete':
             if task_id in running_processes:
                 try:
@@ -1140,9 +1512,9 @@ def api_task_batch():
 @login_required
 def api_run_task(id):
     task = Task.query.get(id)
-    if task and getattr(task, 'is_disabled', 0) == 1: return jsonify({"status": "error", "msg": "该任务已被禁用"})
+    if not task: return jsonify({"status": "error", "msg": "任务不存在"})
     if id in running_processes: return jsonify({"status": "error", "msg": "运行中"})
-    threading.Thread(target=execute_task, args=(id,)).start()
+    threading.Thread(target=execute_task, args=(id, True)).start()
     return jsonify({"status": "success"})
 
 
@@ -1858,7 +2230,7 @@ def api_update_do():
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': f"==============================================\n"})
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': f"📦 更新包已保存至: {zip_path}\n"})
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': f"⚠️ 面具模块无法在后台直接完成自覆盖更新。\n👉 请您打开面具(Magisk)或 KernelSU App，选择从本地安装该模块并重启手机即可完成更新！\n"})
-                socketio.emit('log_stream', {'task_id': stream_id, 'data': f"==============================================\n更新失败触发标识\n"}) # 发送失败标志强制前端关闭转圈并让用户看提示
+                socketio.emit('log_stream', {'task_id': stream_id, 'data': f"==============================================\n更新失败触发标识\n"})
                 
             else:
                 # ================= 原有的源码/Docker/Termux 更新逻辑 =================
@@ -2012,6 +2384,47 @@ def run_scheduler_forever():
             except Exception:
                 pass
 
+        try:
+            with engine.connect() as conn:
+                conn.execute(text('SELECT source_type FROM task LIMIT 1'))
+        except Exception:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE task ADD COLUMN source_type VARCHAR(20) DEFAULT 'manual'"))
+                print("Successfully migrated tasks.db task with source_type column.")
+            except Exception:
+                pass
+
+        try:
+            with engine.connect() as conn:
+                conn.execute(text('SELECT source_key FROM task LIMIT 1'))
+        except Exception:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE task ADD COLUMN source_key VARCHAR(100) DEFAULT 'manual'"))
+                print("Successfully migrated tasks.db task with source_key column.")
+            except Exception:
+                pass
+
+        try:
+            with engine.connect() as conn:
+                conn.execute(text('SELECT source_name FROM task LIMIT 1'))
+        except Exception:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE task ADD COLUMN source_name VARCHAR(100) DEFAULT '单脚本'"))
+                print("Successfully migrated tasks.db task with source_name column.")
+            except Exception:
+                pass
+
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE task SET source_type = 'manual' WHERE source_type IS NULL OR source_type = ''"))
+                conn.execute(text("UPDATE task SET source_key = 'manual' WHERE source_key IS NULL OR source_key = ''"))
+                conn.execute(text("UPDATE task SET source_name = '单脚本' WHERE source_name IS NULL OR source_name = ''"))
+        except Exception:
+            pass
+
         env_engine = db.engines['envs']
         try:
             with env_engine.connect() as conn:
@@ -2041,6 +2454,53 @@ def run_scheduler_forever():
             Task.query.filter_by(status='Running').update({'status': 'Idle'})
             Dependency.query.filter(Dependency.status.in_(['Installing', 'Uninstalling'])).update({'status': 'Error'})
             Subscription.query.filter_by(status='Running').update({'status': 'Idle'})
+            db.session.commit()
+        except:
+            pass
+
+        try:
+            if not TaskView.query.filter_by(source_key='manual').first():
+                db.session.add(TaskView(
+                    name='单脚本',
+                    source_key='manual',
+                    source_type='manual',
+                    is_visible=0,
+                    is_system=1,
+                    sort_order=0
+                ))
+                db.session.commit()
+        except:
+            pass
+
+        try:
+            sub_tasks = db.session.query(Task.source_key, Task.source_name, Task.source_type).filter(
+                Task.source_key.isnot(None),
+                Task.source_key != '',
+                Task.source_type == 'subscription'
+            ).distinct().all()
+
+            max_order = db.session.query(db.func.max(TaskView.sort_order)).scalar() or 0
+
+            for source_key, source_name, source_type in sub_tasks:
+                exists = TaskView.query.filter_by(source_key=source_key).first()
+                if not exists:
+                    max_order += 1
+                    db.session.add(TaskView(
+                        name=source_name or source_key,
+                        source_key=source_key,
+                        source_type=source_type or 'subscription',
+                        is_visible=0,
+                        is_system=0,
+                        sort_order=max_order
+                    ))
+                else:
+                    changed = False
+                    if exists.name != (source_name or source_key):
+                        exists.name = source_name or source_key
+                        changed = True
+                    if exists.source_type != (source_type or 'subscription'):
+                        exists.source_type = source_type or 'subscription'
+                        changed = True
             db.session.commit()
         except:
             pass
@@ -2132,7 +2592,7 @@ JSON.stringify = function(value, replacer, space) {
                 scheduler.add_job(auto_clean_logs, CronTrigger.from_crontab('0 2 * * *', timezone=tz_str), id='sys_log_clean')
 
             try:
-                for task in Task.query.all(): 
+                for task in Task.query.all():
                     add_job_to_scheduler(task)
                 for sub in Subscription.query.all():
                     add_sub_job_to_scheduler(sub)

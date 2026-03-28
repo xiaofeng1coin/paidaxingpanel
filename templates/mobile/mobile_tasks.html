@@ -8,9 +8,16 @@
 
 {% block content %}
 <div class="filter-pills">
-    <a href="/?status=all" class="pill {% if status_filter == 'all' %}active{% endif %}">全部</a>
-    <a href="/?status=normal" class="pill {% if status_filter == 'normal' %}active{% endif %}">正常</a>
-    <a href="/?status=disabled" class="pill {% if status_filter == 'disabled' %}active{% endif %}">禁用</a>
+    <a href="/?status=all&per_page={{ per_page }}" class="pill {% if status_filter == 'all' and source_filter == 'all' %}active{% endif %}">全部</a>
+    <a href="/?status=normal&per_page={{ per_page }}" class="pill {% if status_filter == 'normal' and source_filter == 'all' %}active{% endif %}">正常</a>
+    <a href="/?status=disabled&per_page={{ per_page }}" class="pill {% if status_filter == 'disabled' and source_filter == 'all' %}active{% endif %}">禁用</a>
+</div>
+
+<div class="filter-pills">
+    {% for view in source_views %}
+    <a href="/?source={{ view.source_key }}&per_page={{ per_page }}" class="pill {% if source_filter == view.source_key %}active{% endif %}">{{ view.name }}</a>
+    {% endfor %}
+    <button type="button" class="pill border-0" style="background:#fff;" onclick="openTaskViewSheet()">视图管理</button>
 </div>
 
 <div class="accordion-list">
@@ -60,12 +67,26 @@
 {% if pagination.pages > 1 %}
 <div class="d-flex justify-content-center mt-4">
     <div class="btn-group bg-white rounded-3 shadow-sm border">
-        <a href="{{ url_for('tasks', status=status_filter, page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
+        <a href="{{ url_for('tasks', status=status_filter if source_filter == 'all' else 'all', source=source_filter, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
         <span class="btn btn-light border-0 disabled text-dark fw-bold font-monospace px-4">{{ pagination.page }} / {{ pagination.pages }}</span>
-        <a href="{{ url_for('tasks', status=status_filter, page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
+        <a href="{{ url_for('tasks', status=status_filter if source_filter == 'all' else 'all', source=source_filter, per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
     </div>
 </div>
 {% endif %}
+
+<div class="offcanvas offcanvas-bottom rounded-top-4" tabindex="-1" id="taskViewSheet" data-bs-backdrop="static" data-bs-scroll="false" style="height: 70vh;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title fw-bold">视图管理</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body p-0">
+        <div id="taskViewList"></div>
+    </div>
+    <div class="p-3 border-top bg-white">
+        <div class="text-muted small mb-2" id="taskViewTip" style="display:none;">已修改，关闭后自动刷新</div>
+        <button type="button" class="btn btn-dark w-100 py-2 rounded-3" data-bs-dismiss="offcanvas">关闭</button>
+    </div>
+</div>
 
 <button class="fab" data-bs-toggle="modal" data-bs-target="#addTaskModal"><i class="bi bi-plus-lg"></i></button>
 
@@ -93,6 +114,58 @@
 <script>
     const socket = io();
     let activeTerminalId = null;
+    let taskViewSheet = null;
+    let taskViewChanged = false;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        taskViewSheet = new bootstrap.Offcanvas(document.getElementById('taskViewSheet'));
+        document.getElementById('taskViewSheet').addEventListener('hidden.bs.offcanvas', function() {
+            if (taskViewChanged) {
+                location.reload();
+            }
+        });
+    });
+
+    function openTaskViewSheet() {
+        taskViewChanged = false;
+        document.getElementById('taskViewTip').style.display = 'none';
+        fetch('/api/task_views').then(res => res.json()).then(data => {
+            if (data.status !== 'success') return;
+            const list = document.getElementById('taskViewList');
+            list.innerHTML = '';
+            data.data.forEach(item => {
+                list.innerHTML += `
+                    <div class="d-flex justify-content-between align-items-center px-3 py-3 border-bottom bg-white">
+                        <div>
+                            <div class="fw-bold text-dark">${item.name}</div>
+                            <div class="text-muted small">${item.source_type === 'manual' ? '单脚本' : '订阅'}</div>
+                        </div>
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" id="task-view-switch-${item.id}" type="checkbox" ${item.is_visible == 1 ? 'checked' : ''} onchange="toggleTaskView(${item.id})">
+                        </div>
+                    </div>
+                `;
+            });
+            taskViewSheet.show();
+        });
+    }
+
+    function toggleTaskView(id) {
+        const switchEl = document.getElementById(`task-view-switch-${id}`);
+        const oldChecked = !switchEl.checked;
+        fetch(`/api/task_views/toggle/${id}`, {
+            method: 'POST'
+        }).then(res => res.json()).then(data => {
+            if (data.status === 'success') {
+                taskViewChanged = true;
+                document.getElementById('taskViewTip').style.display = 'block';
+            } else {
+                switchEl.checked = oldChecked;
+            }
+        }).catch(() => {
+            switchEl.checked = oldChecked;
+        });
+    }
 
     function toggleTerminal(id) {
         const termBox = document.getElementById(`term-${id}`);

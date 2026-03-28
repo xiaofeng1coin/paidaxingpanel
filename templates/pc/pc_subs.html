@@ -59,7 +59,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                         <td class="text-center">
                             <div class="d-inline-flex align-items-center justify-content-center w-100">
                                 <span id="run-btn-wrap-{{ sub.id }}">
-                                    {% if sub.status != 'Running' and sub.is_disabled != 1 %}
+                                    {% if sub.status != 'Running' %}
                                     <button class="action-link" onclick='runSub({{ sub.id }}, {{ sub.name | tojson }})'>运行</button>
                                     {% endif %}
                                 </span>

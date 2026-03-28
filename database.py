@@ -44,6 +44,9 @@ class Task(db.Model):
     last_run = db.Column(db.String(50), default='Never')
     last_duration = db.Column(db.String(20), default='-')
     is_disabled = db.Column(db.Integer, default=0)
+    source_type = db.Column(db.String(20), default='manual')
+    source_key = db.Column(db.String(100), default='manual')
+    source_name = db.Column(db.String(100), default='单脚本')
 
 class Dependency(db.Model):
     __bind_key__ = 'tasks'
@@ -71,6 +74,16 @@ class Subscription(db.Model):
     status = db.Column(db.String(20), default='Idle')
     last_run = db.Column(db.String(50), default='-')
     is_disabled = db.Column(db.Integer, default=0)
+
+class TaskView(db.Model):
+    __bind_key__ = 'tasks'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    source_key = db.Column(db.String(100), nullable=False, unique=True)
+    source_type = db.Column(db.String(20), default='manual')
+    is_visible = db.Column(db.Integer, default=0)
+    is_system = db.Column(db.Integer, default=0)
+    sort_order = db.Column(db.Integer, default=0)
 
 # =======================
 # 3. envs.db (环境变量)
