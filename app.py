@@ -322,7 +322,8 @@ def get_combined_env():
     with app.app_context():
         for e in Env.query.filter((Env.is_disabled == 0) | (Env.is_disabled == None)).order_by(
                 Env.position.asc()).all():
-            run_env[e.name] = str(e.value)
+            clean_value = str(e.value).replace('\r\n', '\n').replace('\r', '\n').lstrip('\ufeff')
+            run_env[e.name] = clean_value
 
         proxy_cfg = SystemConfig.query.filter_by(key='proxy').first()
         if proxy_cfg and proxy_cfg.value:
@@ -333,10 +334,11 @@ def get_combined_env():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             for line in f:
-                line = line.strip()
+                line = line.replace('\ufeff', '').strip()
                 if line.startswith('export '):
                     match = re.match(r'^export\s+([A-Za-z0-9_]+)=[\'"]?(.*?)[\'"]?$', line)
-                    if match: run_env[match.group(1)] = match.group(2)
+                    if match:
+                        run_env[match.group(1)] = match.group(2).replace('\r\n', '\n').replace('\r', '\n').lstrip('\ufeff')
     return run_env
 
 
@@ -604,6 +606,7 @@ def execute_task(task_id, ignore_disabled=False, retry_count=0):
             socketio.emit('log_stream', {'task_id': task.id, 'data': start_msg, 'clear': True})
 
             need_retry = False
+            max_auto_retry = 20
 
             with open(log_file_path, 'w', encoding='utf-8') as f:
                 f.write(start_msg)
@@ -665,7 +668,7 @@ def execute_task(task_id, ignore_disabled=False, retry_count=0):
                 diagnosis = diagnose_task_issue(output_text, returncode, duration)
 
                 if diagnosis:
-                    if diagnosis.get('auto_fix') and retry_count < 1:
+                    if diagnosis.get('auto_fix') and retry_count < max_auto_retry:
                         write_log("\n================ 智能诊断开始 ================\n")
                         write_log(f"🔍 已识别问题: {diagnosis.get('title')}\n")
                         write_log(f"📌 可能原因: {diagnosis.get('reason')}\n")
@@ -680,7 +683,7 @@ def execute_task(task_id, ignore_disabled=False, retry_count=0):
 
                         if install_ok:
                             write_log(f"\n✅ 自动修复成功，已安装依赖: {diagnosis.get('package')}\n")
-                            write_log("🔁 系统将自动重新运行一次该任务...\n")
+                            write_log(f"🔁 系统将自动重新运行任务，当前为第 {retry_count + 1} 次自动修复重跑...\n")
                             need_retry = True
                         else:
                             write_log(f"\n❌ 自动修复失败，依赖安装未成功: {diagnosis.get('package')}\n")
