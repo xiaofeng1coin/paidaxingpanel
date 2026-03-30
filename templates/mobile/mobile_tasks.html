@@ -43,8 +43,8 @@
             
             <div class="action-group">
                 <button class="btn-action" onclick="toggleTerminal({{ task.id }})"><i class="bi bi-card-text me-1"></i>日志</button>
-                <a class="btn-action" href="/api/task/toggle/{{ task.id }}">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
-                <button class="btn-action text-danger" onclick="if(confirm('删除此任务？')) window.location.href='/task/delete/{{ task.id }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
+                <a class="btn-action" href="/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
+                <button class="btn-action text-danger" onclick="if(confirm('删除此任务？')) window.location.href='/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
             </div>
 
             <div class="inline-terminal" id="term-{{ task.id }}">
@@ -194,20 +194,65 @@
         if(!termBox.classList.contains('open')) { toggleTerminal(id); }
         
         document.getElementById(`term-body-${id}`).innerText = '执行中...\n';
-        fetch(`/api/task/run/${id}`).then(r=>r.json());
+        fetch(`/api/task/run/${id}`).then(r=>r.json()).then(data => {
+            if (data.status === 'success') {
+                const ring = document.getElementById(`ring-${id}`);
+                const quickWrap = document.getElementById(`quick-action-${id}`);
+                if (ring) {
+                    ring.className = 'status-ring running';
+                }
+                if (quickWrap) {
+                    quickWrap.innerHTML = `<button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask(${id})"><i class="bi bi-stop-fill"></i></button>`;
+                }
+            } else {
+                alert(data.msg || '启动失败');
+            }
+        }).catch(() => {
+            alert('启动失败');
+        });
     }
 
     function stopTask(id) {
-        window.sysConfirm('确认停止？', () => fetch(`/api/task/stop/${id}`));
+        window.sysConfirm('确认停止？', () => {
+            fetch(`/api/task/stop/${id}`).then(r => r.json()).then(data => {
+                if (data.status === 'success') {
+                    const ring = document.getElementById(`ring-${id}`);
+                    const quickWrap = document.getElementById(`quick-action-${id}`);
+                    if (ring) {
+                        ring.className = 'status-ring idle';
+                    }
+                    if (quickWrap) {
+                        quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
+                    }
+                } else {
+                    alert(data.msg || '停止失败');
+                }
+            }).catch(() => {
+                alert('停止失败');
+            });
+        });
     }
+
+    let mobileTaskLogBuffer = {};
+    let mobileTaskLogTimer = {};
 
     socket.on('log_stream', function(msg) {
         if(activeTerminalId == msg.task_id) {
             const body = document.getElementById(`term-body-${msg.task_id}`);
             if(!body) return;
-            if(msg.clear) body.innerText = '';
-            body.innerText += msg.data.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
-            body.scrollTop = body.scrollHeight;
+            if(msg.clear) {
+                mobileTaskLogBuffer[msg.task_id] = '';
+                body.innerText = '';
+            }
+            mobileTaskLogBuffer[msg.task_id] = (mobileTaskLogBuffer[msg.task_id] || '') + msg.data.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+            if(!mobileTaskLogTimer[msg.task_id]) {
+                mobileTaskLogTimer[msg.task_id] = setTimeout(() => {
+                    body.innerText += mobileTaskLogBuffer[msg.task_id] || '';
+                    mobileTaskLogBuffer[msg.task_id] = '';
+                    body.scrollTop = body.scrollHeight;
+                    mobileTaskLogTimer[msg.task_id] = null;
+                }, 300);
+            }
         }
     });
 
@@ -223,7 +268,6 @@
         } else {
             ring.className = msg.status === 'Idle' ? 'status-ring idle' : 'status-ring error';
             quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
-            setTimeout(()=> location.reload(), 1500); 
         }
     });
 </script>

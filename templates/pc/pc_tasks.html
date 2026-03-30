@@ -113,11 +113,11 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                                     <button class="action-more" data-bs-toggle="dropdown" data-bs-boundary="window">···</button>
                                     <ul class="dropdown-menu dropdown-menu-end dropdown-menu-action border-0">
                                         <li><a class="dropdown-item" href="javascript:void(0);" onclick='openEditModal({{ task.id }}, {{ task.name | tojson }}, {{ task.command | tojson }}, {{ task.cron | tojson }})'><i class="bi bi-pencil-square"></i> 编辑</a></li>
-                                        <li><a class="dropdown-item" href="/api/task/toggle/{{ task.id }}">
+                                        <li><a class="dropdown-item" href="/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}">
                                             <i class="bi bi-slash-circle"></i> {% if task.is_disabled == 1 %}启用{% else %}禁用{% endif %}
                                         </a></li>
                                         <li><hr class="dropdown-divider m-0 my-1"></li>
-                                        <li><a class="dropdown-item text-danger" href="/task/delete/{{ task.id }}" onclick="return confirm('确定要删除该任务吗？')"><i class="bi bi-trash"></i> 删除</a></li>
+                                        <li><a class="dropdown-item text-danger" href="/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}" onclick="return confirm('确定要删除该任务吗？')"><i class="bi bi-trash"></i> 删除</a></li>
                                     </ul>
                                 </div>
                             </div>
@@ -200,6 +200,10 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 <div class="modal fade" id="addTaskModal" tabindex="-1">
     <div class="modal-dialog">
         <form class="modal-content" method="POST" action="/task/add">
+<input type="hidden" name="page" value="{{ pagination.page }}">
+<input type="hidden" name="per_page" value="{{ per_page }}">
+<input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
+<input type="hidden" name="source" value="{{ source_filter }}">
             <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">配置新任务</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body p-4">
                 <div class="mb-3"><label class="form-label text-muted small fw-medium">任务名称</label><input type="text" name="name" class="form-control" required></div>
@@ -216,6 +220,10 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 <div class="modal fade" id="editTaskModal" tabindex="-1">
     <div class="modal-dialog">
         <form class="modal-content" id="editTaskForm" method="POST">
+<input type="hidden" name="page" value="{{ pagination.page }}">
+<input type="hidden" name="per_page" value="{{ per_page }}">
+<input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
+<input type="hidden" name="source" value="{{ source_filter }}">
             <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">编辑任务</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body p-4">
                 <div class="mb-3"><label class="form-label text-muted small fw-medium">任务名称</label><input type="text" id="edit_name" name="name" class="form-control" required></div>
@@ -281,11 +289,62 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
     function runTask(taskId, taskName) {
         openLogModal(taskId, taskName);
         document.getElementById('modal-log-container').innerHTML = `## 开始执行... 准备下发指令\n\n`;
-        fetch(`/api/task/run/${taskId}`).then(res => res.json());
+        fetch(`/api/task/run/${taskId}`).then(res => res.json()).then(data => {
+            if (data.status === 'success') {
+                const statusCol = document.getElementById(`status-col-${taskId}`);
+                const runBtnWrap = document.getElementById(`run-btn-wrap-${taskId}`);
+                const durationCol = document.getElementById(`duration-col-${taskId}`);
+                const lastRunCol = document.getElementById(`lastrun-col-${taskId}`);
+                if (statusCol) {
+                    statusCol.innerHTML = `<span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>`;
+                }
+                if (runBtnWrap) {
+                    runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">停止</button>`;
+                }
+                if (durationCol) {
+                    durationCol.innerText = "执行中...";
+                }
+                if (lastRunCol) {
+                    const now = new Date();
+                    const pad = n => String(n).padStart(2, '0');
+                    lastRunCol.innerText = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+                }
+            } else {
+                window.alert(data.msg || '启动失败');
+            }
+        }).catch(() => {
+            window.alert('启动失败');
+        });
     }
 
     function stopTask(taskId) {
-        window.sysConfirm('确定中断该任务吗？', () => { fetch(`/api/task/stop/${taskId}`).then(res => res.json()); });
+        window.sysConfirm('确定中断该任务吗？', () => {
+            fetch(`/api/task/stop/${taskId}`).then(res => res.json()).then(data => {
+                if (data.status === 'success') {
+                    const statusCol = document.getElementById(`status-col-${taskId}`);
+                    const runBtnWrap = document.getElementById(`run-btn-wrap-${taskId}`);
+                    const durationCol = document.getElementById(`duration-col-${taskId}`);
+                    const row = document.getElementById(`row-${taskId}`);
+                    let safeName = '';
+                    if (row && row.cells[2]) {
+                        safeName = row.cells[2].innerText.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    }
+                    if (statusCol) {
+                        statusCol.innerHTML = `<span class="badge-soft badge-soft-secondary">空闲</span>`;
+                    }
+                    if (runBtnWrap) {
+                        runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId}, ${JSON.stringify(safeName)})">运行</button>`;
+                    }
+                    if (durationCol) {
+                        durationCol.innerText = 'Stopped';
+                    }
+                } else {
+                    window.alert(data.msg || '停止失败');
+                }
+            }).catch(() => {
+                window.alert('停止失败');
+            });
+        });
     }
 
     function openEditModal(id, name, command, cron) {
@@ -359,12 +418,25 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         });
     }
 
+    let taskLogBuffer = '';
+    let taskLogFlushTimer = null;
+
     socket.on('log_stream', function(msg) {
         if (currentListeningTaskId == msg.task_id) {
             const logContainer = document.getElementById('modal-log-container');
-            if (msg.clear) logContainer.textContent = '';
-            logContainer.textContent += cleanTerminalOutput(msg.data);
-            logContainer.scrollTop = logContainer.scrollHeight;
+            if (msg.clear) {
+                taskLogBuffer = '';
+                logContainer.textContent = '';
+            }
+            taskLogBuffer += cleanTerminalOutput(msg.data);
+            if (!taskLogFlushTimer) {
+                taskLogFlushTimer = setTimeout(() => {
+                    logContainer.textContent += taskLogBuffer;
+                    taskLogBuffer = '';
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                    taskLogFlushTimer = null;
+                }, 300);
+            }
         }
     });
 
@@ -384,7 +456,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                 if (lastRunCol && msg.last_run) lastRunCol.innerText = msg.last_run;
             } else {
                 statusCol.innerHTML = status === 'Idle' ? `<span class="badge-soft badge-soft-secondary">空闲</span>` : `<span class="badge-soft badge-soft-danger">出错</span>`;
-                runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId}, '${safeName}')">运行</button>`;
+                runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId}, ${JSON.stringify(safeName)})">运行</button>`;
                 if (durationCol && msg.duration) durationCol.innerText = msg.duration;
             }
         }

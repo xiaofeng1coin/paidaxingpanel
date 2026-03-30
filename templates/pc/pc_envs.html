@@ -11,9 +11,16 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
     <h5 class="fw-bold mb-0">环境变量</h5>
-    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addEnvModal"><i class="bi bi-plus-lg me-1"></i>新建变量</button>
+    <div class="d-flex align-items-center gap-2">
+        <form method="GET" action="/envs" class="d-flex align-items-center gap-2 m-0">
+            <input type="text" name="keyword" class="form-control form-control-sm" style="width: 220px;" placeholder="搜索变量名或备注" value="{{ keyword or '' }}">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
+            <button type="submit" class="btn btn-outline-primary btn-sm">搜索</button>
+        </form>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addEnvModal"><i class="bi bi-plus-lg me-1"></i>新建变量</button>
+    </div>
 </div>
 
 <div class="card border-0 mb-3">
@@ -70,7 +77,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         <nav>
             <ul class="pagination pagination-sm m-0">
                 <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
-                    <a class="page-link" href="{{ url_for('envs', per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
+                    <a class="page-link" href="{{ url_for('envs', keyword=keyword, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}">上一页</a>
                 </li>
                 {% for p in pagination.iter_pages(left_edge=1, left_current=2, right_current=2, right_edge=1) %}
                     {% if p %}
@@ -89,7 +96,8 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         {% endif %}
 
         <form method="GET" action="/envs" id="filterForm" class="m-0">
-            <select name="per_page" class="form-select form-select-sm" style="width: 100px;" onchange="document.getElementById('filterForm').submit();">
+    <input type="hidden" name="keyword" value="{{ keyword or '' }}">
+    <select name="per_page" class="form-select form-select-sm" style="width: 100px;" onchange="document.getElementById('filterForm').submit();">
                 <option value="10" {% if per_page == 10 %}selected{% endif %}>10条/页</option>
                 <option value="20" {% if per_page == 20 %}selected{% endif %}>20条/页</option>
                 <option value="50" {% if per_page == 50 %}selected{% endif %}>50条/页</option>

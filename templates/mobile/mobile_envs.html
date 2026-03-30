@@ -7,6 +7,13 @@
 {% endblock %}
 
 {% block content %}
+<form method="GET" action="/envs" class="px-3 pt-3">
+    <div class="d-flex gap-2">
+        <input type="text" name="keyword" class="form-control" placeholder="搜索变量名或备注" value="{{ keyword or '' }}">
+        <input type="hidden" name="per_page" value="{{ per_page }}">
+        <button type="submit" class="btn btn-dark">搜索</button>
+    </div>
+</form>
 <div class="accordion-list mt-2">
     {% for env in pagination.items %}
     <div class="list-item {% if env.is_disabled == 1 %}disabled{% endif %}" id="env-item-{{ env.id }}">
@@ -37,7 +44,7 @@
 {% if pagination.pages > 1 %}
 <div class="d-flex justify-content-center mt-4">
     <div class="btn-group bg-white rounded-3 shadow-sm border">
-        <a href="{{ url_for('envs', page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
+        <a href="{{ url_for('envs', keyword=keyword, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
         <span class="btn btn-light border-0 disabled text-dark fw-bold font-monospace px-4">{{ pagination.page }} / {{ pagination.pages }}</span>
         <a href="{{ url_for('envs', page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
     </div>

@@ -23,6 +23,7 @@ import shutil
 import secrets
 import logging
 import traceback
+import uuid
 from datetime import datetime, timedelta
 
 # --- 新增：跨平台安全的子进程黑窗口隐藏参数 ---
@@ -118,7 +119,17 @@ if not os.path.exists(VERSION_FILE):
 
 app = Flask(__name__)
 
-app.secret_key = os.urandom(32)
+INSTANCE_ID_FILE = os.path.join(DB_DIR, 'instance_id')
+if os.path.exists(INSTANCE_ID_FILE):
+    with open(INSTANCE_ID_FILE, 'r', encoding='utf-8') as f:
+        _instance_id = f.read().strip()
+else:
+    _instance_id = uuid.uuid4().hex
+    with open(INSTANCE_ID_FILE, 'w', encoding='utf-8') as f:
+        f.write(_instance_id)
+
+app.secret_key = hashlib.sha256(_instance_id.encode('utf-8')).hexdigest()
+_instance_cookie_suffix = hashlib.md5(_instance_id.encode('utf-8')).hexdigest()[:12]
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(DB_DIR, 'auth.db')}"
 app.config['SQLALCHEMY_BINDS'] = {
@@ -126,10 +137,22 @@ app.config['SQLALCHEMY_BINDS'] = {
     'envs': f"sqlite:///{os.path.join(DB_DIR, 'envs.db')}"
 }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 30,
+    'max_overflow': 60,
+    'pool_timeout': 30,
+    'pool_recycle': 1800,
+    'pool_pre_ping': True,
+    'connect_args': {
+        'check_same_thread': False,
+        'timeout': 30
+    }
+}
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=30)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_NAME'] = f"patrickpanel_session_{_instance_cookie_suffix}"
+app.config['SESSION_COOKIE_PATH'] = '/'
 
 db.init_app(app)
 
@@ -225,6 +248,12 @@ def render_template(template_name_or_list, **context):
     else:
         return flask_render_template(f"pc/pc_{template_name_or_list}", **context)
 
+def build_tasks_redirect():
+    page = request.values.get('page', 1, type=int)
+    per_page = request.values.get('per_page', 10, type=int)
+    status = request.values.get('status', 'all')
+    source = request.values.get('source', 'all')
+    return redirect(url_for('tasks', page=page, per_page=per_page, status=status, source=source))
 
 @app.before_request
 def global_security_check():
@@ -354,6 +383,50 @@ def normalize_python_package_name(pkg_name):
     }
     return mapping.get(pkg_name, pkg_name)
 
+def normalize_dependency_key(pkg_name, pkg_type):
+    pkg_name = (pkg_name or '').strip()
+    if not pkg_name:
+        return ''
+
+    if pkg_type == 'npm':
+        if pkg_name.startswith('@'):
+            parts = pkg_name.split('/')
+            if len(parts) >= 2:
+                scope = parts[0]
+                name_part = parts[1]
+                if '@' in name_part:
+                    name_part = name_part.split('@', 1)[0]
+                return f"{scope}/{name_part}"
+            return pkg_name
+        if '@' in pkg_name:
+            return pkg_name.split('@', 1)[0]
+        return pkg_name
+
+    if pkg_type == 'pip':
+        pkg_name = normalize_python_package_name(pkg_name)
+        pkg_name = re.split(r'[<>=!~]', pkg_name, 1)[0].strip()
+        return pkg_name.lower().replace('_', '-')
+
+    return pkg_name
+
+
+def find_installed_dependency(pkg_name, pkg_type):
+    target_key = normalize_dependency_key(pkg_name, pkg_type)
+    if not target_key:
+        return None
+
+    deps = Dependency.query.filter_by(pkg_type=pkg_type).all()
+    for dep in deps:
+        if dep.status != 'Installed':
+            continue
+        dep_key = normalize_dependency_key(dep.name, pkg_type)
+        if dep_key == target_key:
+            if pkg_type == 'npm':
+                dep_path = os.path.join(NODE_DIR, 'node_modules', target_key)
+                if not os.path.exists(dep_path):
+                    continue
+            return dep
+    return None
 
 def upsert_dependency_record(pkg_name, pkg_type, status):
     dep = Dependency.query.filter_by(name=pkg_name, pkg_type=pkg_type).first()
@@ -373,6 +446,13 @@ def run_dependency_install_sync(pkg_name, pkg_type, log_writer=None):
 
         if not pkg_name or not re.match(r'^[A-Za-z0-9_\-\.\@\/=]+$', pkg_name):
             return False, "依赖名包含非法字符"
+
+        existing_installed_dep = find_installed_dependency(pkg_name, pkg_type)
+        if existing_installed_dep:
+            msg = f"检测到已安装同名依赖，跳过重复安装：当前请求 [{pkg_name}]，已安装记录 [{existing_installed_dep.name}]"
+            if log_writer:
+                log_writer(msg + "\n")
+            return True, msg
 
         node_mirror = SystemConfig.query.filter_by(key='node_mirror').first()
         python_mirror = SystemConfig.query.filter_by(key='python_mirror').first()
@@ -431,11 +511,32 @@ def run_dependency_install_sync(pkg_name, pkg_type, log_writer=None):
             if log_writer:
                 log_writer(end_msg)
 
-        dep.status = 'Installed' if process.returncode == 0 else 'Error'
+        install_success = process.returncode == 0
+
+        if install_success and pkg_type == 'npm':
+            verify_cmd = ['node', '-e', f"require('{normalize_dependency_key(pkg_name, 'npm')}'); console.log('ok')"]
+            verify_proc = subprocess.run(
+                verify_cmd,
+                cwd=SCRIPTS_DIR,
+                env=get_combined_env(),
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                **SUBPROCESS_KWARGS
+            )
+            if verify_proc.returncode != 0:
+                install_success = False
+                with open(log_file_path, 'a', encoding='utf-8') as f:
+                    f.write("\n[依赖校验失败] 安装命令返回成功，但实际 require 失败：\n")
+                    f.write(verify_proc.stdout or '')
+                    f.write(verify_proc.stderr or '')
+
+        dep.status = 'Installed' if install_success else 'Error'
         db.session.commit()
         socketio.emit('dep_status', {'id': dep.id, 'status': dep.status})
 
-        if process.returncode == 0:
+        if install_success:
             return True, ''.join(install_output)
         return False, ''.join(install_output)
     except Exception as e:
@@ -523,7 +624,20 @@ def diagnose_task_issue(output_text, returncode, duration_seconds):
                 'solution': "去环境变量或者配置文件中删除该变量即可，是整行删除，不是只删除变量值，目前常见于哔哩哔哩脚本中的 github 加速变量"
             }
 
-    if 'ck' in text_lower and re.search(r'ck\s*[为=:：]?\s*0\b', text_lower):
+    ck_zero_match = re.search(r'(?<![a-z0-9_])(jd_cookie|ck|cookie|cookies)\s*[为=:：]?\s*0\b', text_lower)
+    has_valid_ck_signal = any(keyword in text_lower for keyword in [
+        '登录成功',
+        '开始任务',
+        '用户：',
+        '用户:',
+        '获取sessionid',
+        '获取signature_key',
+        '获取code',
+        '阅读抽奖',
+        '签到id',
+        '抽奖获得'
+    ])
+    if ck_zero_match and not has_valid_ck_signal and returncode != 0:
         return {
             'type': 'env_name_wrong',
             'title': "检测到脚本读取到 ck 为 0",
@@ -533,14 +647,31 @@ def diagnose_task_issue(output_text, returncode, duration_seconds):
         }
 
     if 'sendnotify' in text_lower or '通知' in text or 'pushplus' in text_lower or 'telegram' in text_lower:
-        if '未配置' in text or 'not configured' in text_lower or 'undefined' in text_lower:
-            return {
-                'type': 'notify_config_issue',
-                'title': "检测到通知配置可能缺失",
-                'auto_fix': False,
-                'reason': "脚本通知参数未配置或脚本内通知开关未开启",
-                'solution': "在配置文件中配置通知参数\n看脚本注释是否有通知开关，有的话根据注释填写变量将其打开\n更换其他脚本测试通知"
-            }
+        notify_success_keywords = [
+            '发送通知消息成功',
+            '发送通知成功',
+            'telegram发送通知消息成功',
+            '钉钉发送通知消息成功',
+            'push+发送',
+            'wxpusher 发送通知消息成功',
+            'server酱发送通知消息成功'
+        ]
+        if not any(k.lower() in text_lower for k in notify_success_keywords):
+            if (
+                '未配置' in text or
+                'not configured' in text_lower or
+                '未找到推送配置' in text or
+                'push_key' in text_lower and '未填写' in text or
+                'tg_bot_token' in text_lower and '未填写' in text or
+                'dd_bot_token' in text_lower and '未填写' in text
+            ):
+                return {
+                    'type': 'notify_config_issue',
+                    'title': "检测到通知配置可能缺失",
+                    'auto_fix': False,
+                    'reason': "脚本通知参数未配置或脚本内通知开关未开启",
+                    'solution': "在配置文件中配置通知参数\n看脚本注释是否有通知开关，有的话根据注释填写变量将其打开\n更换其他脚本测试通知"
+                }
 
     return None
 
@@ -606,7 +737,7 @@ def execute_task(task_id, ignore_disabled=False, retry_count=0):
             socketio.emit('log_stream', {'task_id': task.id, 'data': start_msg, 'clear': True})
 
             need_retry = False
-            max_auto_retry = 20
+            max_auto_retry = 6
 
             with open(log_file_path, 'w', encoding='utf-8') as f:
                 f.write(start_msg)
@@ -615,10 +746,6 @@ def execute_task(task_id, ignore_disabled=False, retry_count=0):
                 def write_log(msg):
                     f.write(msg)
                     f.flush()
-                    try:
-                        os.fsync(f.fileno())
-                    except:
-                        pass
                     socketio.emit('log_stream', {'task_id': task.id, 'data': msg})
 
                 full_output_parts = []
@@ -643,12 +770,26 @@ def execute_task(task_id, ignore_disabled=False, retry_count=0):
 
                     threading.Thread(target=timeout_monitor, daemon=True).start()
 
+                    log_buffer = []
+                    last_emit_time = time.time()
+
                     for line in process.stdout:
                         full_output_parts.append(line)
                         f.write(line)
-                        f.flush()  
-                        os.fsync(f.fileno())  
-                        socketio.emit('log_stream', {'task_id': task.id, 'data': line})
+                        log_buffer.append(line)
+
+                        now_ts = time.time()
+                        if len(log_buffer) >= 30 or (now_ts - last_emit_time) >= 0.5:
+                            chunk = ''.join(log_buffer)
+                            f.flush()
+                            socketio.emit('log_stream', {'task_id': task.id, 'data': chunk})
+                            log_buffer = []
+                            last_emit_time = now_ts
+
+                    if log_buffer:
+                        chunk = ''.join(log_buffer)
+                        f.flush()
+                        socketio.emit('log_stream', {'task_id': task.id, 'data': chunk})
                         
                     process.wait()
                     running_processes.pop(task_id, None)
@@ -666,15 +807,17 @@ def execute_task(task_id, ignore_disabled=False, retry_count=0):
                 output_text = ''.join(full_output_parts)
 
                 diagnosis = diagnose_task_issue(output_text, returncode, duration)
-
+                last_fix_key = f"_last_fix_{task_id}"
+                current_fix_key = f"{diagnosis.get('pkg_type')}:{diagnosis.get('package')}" if diagnosis and diagnosis.get('package') else None
+                repeated_same_fix = getattr(execute_task, last_fix_key, None) == current_fix_key if current_fix_key else False
                 if diagnosis:
-                    if diagnosis.get('auto_fix') and retry_count < max_auto_retry:
+                    if diagnosis.get('auto_fix') and retry_count < max_auto_retry and not repeated_same_fix:
                         write_log("\n================ 智能诊断开始 ================\n")
                         write_log(f"🔍 已识别问题: {diagnosis.get('title')}\n")
                         write_log(f"📌 可能原因: {diagnosis.get('reason')}\n")
                         write_log(f"🛠️ 自动修复: 准备安装依赖 {diagnosis.get('package')}\n")
                         write_log("==============================================\n\n")
-
+                        setattr(execute_task, last_fix_key, current_fix_key)
                         install_ok, install_msg = run_dependency_install_sync(
                             diagnosis.get('package'),
                             diagnosis.get('pkg_type'),
@@ -739,9 +882,20 @@ def parse_script_meta(filepath, default_name):
     try:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read(8192)
-            name_match = re.search(r'new\s+Env$[\'"](.*?)[\'"]$', content)
+
+            name_match = re.search(r'任务名称[：:]\s*([^\r\n*]+)', content, re.IGNORECASE)
             if name_match:
-                name = name_match.group(1)
+                name = name_match.group(1).strip()
+
+            if name == default_name:
+                name_match = re.search(r'\b(?:const|let|var)\s+jsname\s*=\s*[\'"](.+?)[\'"]', content)
+                if name_match:
+                    name = name_match.group(1).strip()
+
+            if name == default_name:
+                name_match = re.search(r'\b(?:new\s+)?Env\s*\(\s*[\'"](.+?)[\'"]\s*\)', content)
+                if name_match:
+                    name = name_match.group(1).strip()
             
             cron_match = re.search(r'(?:cron|@cron)[^\w\d]+([0-9\*/,-]+\s+[0-9\*/,-]+\s+[0-9\*/,-]+\s+[0-9\*/,-]+\s+[0-9\*/,-]+(?:\s+[0-9\*/,-]+)?)', content, re.IGNORECASE)
             if cron_match:
@@ -751,6 +905,80 @@ def parse_script_meta(filepath, default_name):
     except:
         pass
     return name, cron
+
+def auto_import_local_scripts():
+    with app.app_context():
+        try:
+            existing_commands = {t.command for t in Task.query.all()}
+            default_cron = '0 0 * * *'
+            exclude_files = {'ql_env.js', 'sys_notify.js', 'sendNotify.js', 'ql.js', 'common.js', 'utils.js', 'util.js', 'david_cookies.js', 'xfj_sign.js'}
+
+            sub_aliases = {s.alias for s in Subscription.query.all() if s.alias}
+            fixed_exclude_dirs = {'single_scripts'}
+
+            for root, dirs, files in os.walk(SCRIPTS_DIR):
+                rel_root = os.path.relpath(root, SCRIPTS_DIR).replace('\\', '/')
+                if rel_root == '.':
+                    rel_root = ''
+
+                if '.git' in root or '__pycache__' in root:
+                    continue
+
+                path_parts = set(rel_root.split('/')) if rel_root else set()
+                if path_parts & fixed_exclude_dirs:
+                    continue
+                if path_parts & sub_aliases:
+                    continue
+
+                dirs[:] = [d for d in dirs if d not in ['.git', '__pycache__'] and d not in fixed_exclude_dirs and d not in sub_aliases]
+
+                for file_name in files:
+                    if not file_name.endswith(('.js', '.py', '.sh')):
+                        continue
+                    if file_name in exclude_files:
+                        continue
+
+                    full_path = os.path.join(root, file_name)
+                    rel_path = os.path.relpath(full_path, SCRIPTS_DIR).replace('\\', '/')
+
+                    if rel_path in existing_commands:
+                        continue
+
+                    task_exists = Task.query.filter_by(command=rel_path).first()
+                    if task_exists:
+                        existing_commands.add(rel_path)
+                        continue
+
+                    script_name, script_cron = parse_script_meta(full_path, os.path.splitext(os.path.basename(file_name))[0])
+                    cron_to_use = script_cron if script_cron else default_cron
+
+                    new_task = Task(
+                        name=script_name,
+                        command=rel_path,
+                        cron=cron_to_use,
+                        status='Idle',
+                        source_type='manual',
+                        source_key='manual',
+                        source_name='单脚本'
+                    )
+                    db.session.add(new_task)
+                    db.session.commit()
+
+                    if not TaskView.query.filter_by(source_key='manual').first():
+                        db.session.add(TaskView(
+                            name='单脚本',
+                            source_key='manual',
+                            source_type='manual',
+                            is_visible=0,
+                            is_system=1,
+                            sort_order=0
+                        ))
+                        db.session.commit()
+
+                    add_job_to_scheduler(new_task)
+                    existing_commands.add(rel_path)
+        except:
+            pass
 
 def execute_subscription(sub_id, ignore_disabled=False):
     with app.app_context():
@@ -1427,7 +1655,7 @@ def add_task():
         db.session.commit()
 
     add_job_to_scheduler(new_task)
-    return redirect(url_for('tasks'))
+    return build_tasks_redirect()
 
 
 @app.route('/task/edit/<int:id>', methods=['POST'])
@@ -1440,7 +1668,7 @@ def edit_task(id):
         task.cron = request.form.get('cron')
         db.session.commit()
         add_job_to_scheduler(task)
-    return redirect(url_for('tasks'))
+    return build_tasks_redirect()
 
 
 @app.route('/api/task/toggle/<int:id>')
@@ -1454,7 +1682,7 @@ def toggle_task(id):
             if scheduler.get_job(f"task_{task.id}"): scheduler.remove_job(f"task_{task.id}")
         else:
             add_job_to_scheduler(task)
-    return redirect(url_for('tasks'))
+    return build_tasks_redirect()
 
 
 @app.route('/task/delete/<int:id>')
@@ -1470,7 +1698,7 @@ def delete_task(id):
         if scheduler.get_job(f"task_{task.id}"): scheduler.remove_job(f"task_{task.id}")
         db.session.delete(task);
         db.session.commit()
-    return redirect(url_for('tasks'))
+    return build_tasks_redirect()
 
 
 @app.route('/api/task/batch', methods=['POST'])
@@ -1496,7 +1724,7 @@ def api_task_batch():
                 scheduler.remove_job(f"task_{task.id}")
         elif action == 'run':
             if task_id not in running_processes:
-                threading.Thread(target=execute_task, args=(task_id, True)).start()
+                threading.Thread(target=execute_task, args=(id, True), daemon=True).start()
         elif action == 'delete':
             if task_id in running_processes:
                 try:
@@ -1516,8 +1744,15 @@ def api_task_batch():
 def api_run_task(id):
     task = Task.query.get(id)
     if not task: return jsonify({"status": "error", "msg": "任务不存在"})
-    if id in running_processes: return jsonify({"status": "error", "msg": "运行中"})
-    threading.Thread(target=execute_task, args=(id, True)).start()
+    if id in running_processes or task.status == 'Running':
+        return jsonify({"status": "error", "msg": "运行中"})
+
+    task.status = 'Running'
+    task.last_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db.session.commit()
+    socketio.emit('task_status', {'task_id': task.id, 'status': 'Running', 'last_run': task.last_run})
+
+    threading.Thread(target=execute_task, args=(id, True), daemon=True).start()
     return jsonify({"status": "success"})
 
 
@@ -1657,6 +1892,10 @@ def api_install_deps():
     if not package or not re.match(r'^[A-Za-z0-9_\-\.\@\/=]+$', package):
         return jsonify({"status": "error", "msg": "依赖包名称包含非法字符，出于安全考虑拒绝执行"})
 
+    existing_installed_dep = find_installed_dependency(package, pkg_type)
+    if existing_installed_dep:
+        return jsonify({"status": "success", "id": existing_installed_dep.id, "msg": f"已存在已安装依赖：{existing_installed_dep.name}"})
+
     dep = Dependency.query.filter_by(name=package, pkg_type=pkg_type).first()
     if not dep:
         dep = Dependency(name=package, pkg_type=pkg_type, status='Installing')
@@ -1720,9 +1959,18 @@ def envs():
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
-    pagination = Env.query.order_by(Env.position.asc(), Env.id.asc()).paginate(page=page, per_page=per_page, error_out=False)
+    keyword = request.args.get('keyword', '').strip()
+
+    query = Env.query
+    if keyword:
+        query = query.filter(
+            (Env.name.like(f"%{keyword}%")) |
+            (Env.remarks.like(f"%{keyword}%"))
+        )
+
+    pagination = query.order_by(Env.position.asc(), Env.id.asc()).paginate(page=page, per_page=per_page, error_out=False)
     
-    return render_template('envs.html', pagination=pagination, per_page=per_page)
+    return render_template('envs.html', pagination=pagination, per_page=per_page, keyword=keyword)
 
 
 @app.route('/api/env/reorder', methods=['POST'])
@@ -2594,7 +2842,11 @@ JSON.stringify = function(value, replacer, space) {
                 tz_str = os.environ.get('TZ', 'Asia/Shanghai')
                 scheduler.add_job(auto_clean_logs, CronTrigger.from_crontab('0 2 * * *', timezone=tz_str), id='sys_log_clean')
 
+            if not scheduler.get_job('sys_auto_import_local_scripts'):
+                scheduler.add_job(auto_import_local_scripts, 'interval', seconds=10, id='sys_auto_import_local_scripts', max_instances=1, coalesce=True)
+
             try:
+                auto_import_local_scripts()
                 for task in Task.query.all():
                     add_job_to_scheduler(task)
                 for sub in Subscription.query.all():
