@@ -6,6 +6,11 @@
     --text-sub: #6b7280;
     --border: #e5e7eb;
     --accent: #2563eb;
+    --surface-soft: #f3f4f6;
+    --button-primary-bg: #111827;
+    --button-primary-text: #ffffff;
+    --button-secondary-bg: #f3f4f6;
+    --button-secondary-text: #111827;
 }
 
 body { 
@@ -16,13 +21,13 @@ body {
     -webkit-tap-highlight-color: transparent; 
 }
 
-/* 修复1：加上完整的头部布局，让返回按钮有地方显示 */
 .app-header { 
     background: var(--surface); 
     padding: 16px 20px 10px; 
     display: flex; 
     justify-content: space-between; 
     align-items: center; 
+    border-bottom: 1px solid var(--border);
 }
 .app-logo { 
     font-size: 20px; 
@@ -37,6 +42,10 @@ body {
     display: flex; 
     align-items: center; 
     gap: 12px; 
+}
+.header-actions a,
+.header-actions i {
+    color: var(--text-main) !important;
 }
 
 .top-scroll-nav { 
@@ -66,7 +75,6 @@ body {
     border-bottom-color: var(--accent); 
 }
 
-/* 修复2：解决吐司遮挡下拉框的问题 (让鼠标穿透容器) */
 .toast-container { 
     z-index: 1055; 
     pointer-events: none; 
@@ -79,8 +87,8 @@ body {
     right: 20px; 
     width: 56px; 
     height: 56px; 
-    background: var(--text-main); 
-    color: white; 
+    background: var(--button-primary-bg); 
+    color: var(--button-primary-text); 
     border-radius: 50%; 
     display: flex; 
     justify-content: center; 
@@ -92,3 +100,157 @@ body {
     transition: transform 0.2s; 
 }
 .fab:active { transform: scale(0.9); }
+
+.form-control,
+.form-select,
+textarea,
+input {
+    background-color: var(--surface);
+    color: var(--text-main);
+    border-color: var(--border);
+}
+.form-control::placeholder,
+textarea::placeholder,
+input::placeholder {
+    color: var(--text-sub);
+}
+
+.btn-light {
+    background-color: var(--button-secondary-bg) !important;
+    border-color: var(--border) !important;
+    color: var(--button-secondary-text) !important;
+}
+.btn-dark {
+    background-color: var(--button-primary-bg) !important;
+    border-color: var(--button-primary-bg) !important;
+    color: var(--button-primary-text) !important;
+}
+
+.offcanvas {
+    background-color: var(--surface);
+    color: var(--text-main);
+}
+.offcanvas-header,
+.offcanvas-body {
+    background-color: var(--surface);
+    color: var(--text-main);
+}
+.btn-close {
+    opacity: .8;
+}
+
+html.dark-theme {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --text-main: #f8fafc;
+    --text-sub: #94a3b8;
+    --border: #334155;
+    --accent: #3b82f6;
+    --surface-soft: #0f172a;
+    --button-primary-bg: #3b82f6;
+    --button-primary-text: #ffffff;
+    --button-secondary-bg: #0f172a;
+    --button-secondary-text: #f8fafc;
+}
+
+html.dark-theme body {
+    background-color: var(--bg);
+    color: var(--text-main);
+}
+
+html.dark-theme .app-header,
+html.dark-theme .top-scroll-nav,
+html.dark-theme .offcanvas,
+html.dark-theme .offcanvas-header,
+html.dark-theme .offcanvas-body,
+html.dark-theme .modal-content,
+html.dark-theme .modal-header,
+html.dark-theme .modal-body,
+html.dark-theme .modal-footer {
+    background-color: var(--surface) !important;
+    color: var(--text-main) !important;
+    border-color: var(--border) !important;
+}
+
+html.dark-theme .form-control,
+html.dark-theme .form-select,
+html.dark-theme textarea,
+html.dark-theme input {
+    background-color: #0f172a !important;
+    color: var(--text-main) !important;
+    border-color: var(--border) !important;
+}
+
+html.dark-theme .form-control:focus,
+html.dark-theme .form-select:focus,
+html.dark-theme textarea:focus,
+html.dark-theme input:focus {
+    background-color: #0f172a !important;
+    color: var(--text-main) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 0.2rem rgba(59,130,246,.15) !important;
+}
+
+html.dark-theme .text-dark {
+    color: var(--text-main) !important;
+}
+html.dark-theme .text-muted,
+html.dark-theme .text-secondary {
+    color: var(--text-sub) !important;
+}
+html.dark-theme .bg-white,
+html.dark-theme .bg-light {
+    background-color: var(--surface) !important;
+}
+html.dark-theme .border,
+html.dark-theme .border-top,
+html.dark-theme .border-bottom {
+    border-color: var(--border) !important;
+}
+html.dark-theme .btn-light {
+    background-color: var(--button-secondary-bg) !important;
+    border-color: var(--border) !important;
+    color: var(--button-secondary-text) !important;
+}
+html.dark-theme .btn-dark {
+    background-color: var(--button-primary-bg) !important;
+    border-color: var(--button-primary-bg) !important;
+    color: var(--button-primary-text) !important;
+}
+html.dark-theme .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
+}
+html.dark-theme .toast {
+    background-color: #1e293b !important;
+    color: #f8fafc !important;
+}
+html.dark-theme .list-group-item {
+    background-color: var(--surface) !important;
+    color: var(--text-main) !important;
+    border-color: var(--border) !important;
+}
+html.dark-theme .list-group-item.active {
+    background-color: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: #fff !important;
+}
+html.dark-theme .accordion-button {
+    background-color: var(--surface) !important;
+    color: var(--text-main) !important;
+}
+html.dark-theme .accordion-button:not(.collapsed) {
+    background-color: #0f172a !important;
+    color: var(--text-main) !important;
+}
+html.dark-theme .accordion-item {
+    background-color: var(--surface) !important;
+    border-color: var(--border) !important;
+}
+html.dark-theme .form-check-input {
+    background-color: #0f172a;
+    border-color: #475569;
+}
+html.dark-theme .form-check-input:checked {
+    background-color: var(--accent);
+    border-color: var(--accent);
+}

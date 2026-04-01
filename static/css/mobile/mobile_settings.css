@@ -5,5 +5,18 @@
 .setting-item:active { background: var(--bg); }
 .item-icon { width: 32px; font-size: 18px; color: var(--text-sub); }
 
-.tech-input { width: 100%; background: var(--bg); border: 1px solid var(--border); padding: 14px; border-radius: 8px; font-size: 14px; margin-bottom: 12px; outline: none; }
-.tech-input:focus { border-color: var(--text-main); }
+.tech-input { width: 100%; background: var(--bg); border: 1px solid var(--border); padding: 14px; border-radius: 8px; font-size: 14px; margin-bottom: 12px; outline: none; color: var(--text-main); }
+.tech-input:focus { border-color: var(--accent); }
+
+html.dark-theme .tech-input {
+    background: #0f172a;
+    color: var(--text-main);
+    border-color: var(--border);
+}
+html.dark-theme .tech-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 0.2rem rgba(59,130,246,.15);
+}
+html.dark-theme .setting-item .text-dark {
+    color: var(--text-main) !important;
+}

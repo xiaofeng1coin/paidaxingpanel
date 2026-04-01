@@ -38,11 +38,17 @@
         <div><i class="bi bi-cloud-download item-icon text-info"></i> 数据备份</div>
         <i class="bi bi-chevron-right text-muted"></i>
     </a>
+    <a href="#" class="setting-item" onclick="document.getElementById('restoreBackupInput').click()">
+        <div><i class="bi bi-cloud-upload item-icon text-primary"></i> 还原数据</div>
+        <i class="bi bi-chevron-right text-muted"></i>
+    </a>
     <a href="#" class="setting-item" onclick="checkUpdate()">
         <div><i class="bi bi-arrow-repeat item-icon text-danger"></i> 检查更新</div>
         <i class="bi bi-chevron-right text-muted"></i>
     </a>
 </div>
+
+<input type="file" id="restoreBackupInput" accept=".zip" style="display:none;" onchange="restoreBackup(this)">
 
 <!-- 安全弹窗 -->
 <div class="modal fade" id="securityModal" tabindex="-1">
@@ -65,7 +71,7 @@
     </div>
 </div>
 
-<!-- 通知弹窗 (修正后端绑定的键名) -->
+<!-- 通知弹窗 -->
 <div class="modal fade" id="notifyModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable mx-3">
         <form class="modal-content border-0 rounded-4" method="POST" action="/settings/config">
@@ -99,7 +105,6 @@
                     <div class="sc-param mb-2">
                         <input type="text" name="PUSH_KEY" class="tech-input font-monospace mb-0" placeholder="PUSH_KEY" value="{{ config.get('PUSH_KEY', '') }}">
                     </div>
-                    <!-- 重点修复：使用 WXPUSHER_APP_TOKEN 和 WXPUSHER_UID 对齐 app.py -->
                     <div class="wx-param mb-2">
                         <input type="text" name="WXPUSHER_APP_TOKEN" class="tech-input font-monospace" placeholder="WXPUSHER_APP_TOKEN" value="{{ config.get('WXPUSHER_APP_TOKEN', '') }}">
                         <input type="text" name="WXPUSHER_UID" class="tech-input font-monospace mb-0" placeholder="WXPUSHER_UID" value="{{ config.get('WXPUSHER_UID', '') }}">
@@ -129,6 +134,50 @@
             document.querySelectorAll('.wx-param').forEach(el => el.style.display = type === 'wxpusher' ? 'block' : 'none');
         }
     }
+
+    function restoreBackup(input) {
+        if (!input.files || !input.files[0]) return;
+        const file = input.files[0];
+        if (!file.name.toLowerCase().endsWith('.zip')) {
+            alert('仅支持选择 zip 备份文件');
+            input.value = '';
+            return;
+        }
+
+        window.sysConfirm(`确定使用备份文件 [ ${file.name} ] 还原数据吗？此操作会覆盖当前数据，并在完成后自动重启系统。`, () => {
+            const fd = new FormData();
+            fd.append('file', file);
+
+            fetch('/api/settings/restore', {
+                method: 'POST',
+                body: fd
+            }).then(res => res.json()).then(data => {
+                alert(data.msg || (data.status === 'success' ? '还原任务已提交' : '还原失败'));
+                if (data.status === 'success') {
+                    setTimeout(() => location.reload(), 4000);
+                }
+            }).catch(() => {
+                alert('还原请求失败，请稍后重试');
+            }).finally(() => {
+                input.value = '';
+            });
+        });
+    }
+
+    function checkUpdate() {
+        fetch('/api/update/check').then(res => res.json()).then(data => {
+            if (data.status === 'update_available') {
+                alert(`发现新版本：${data.remote_version}\n\n更新内容：\n${data.changelog}`);
+            } else if (data.status === 'no_update') {
+                alert('当前已是最新版本');
+            } else {
+                alert(data.msg || '检查更新失败');
+            }
+        }).catch(() => {
+            alert('网络请求失败');
+        });
+    }
+
     toggleNotify();
 </script>
 {% endblock %}

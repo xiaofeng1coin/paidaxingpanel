@@ -6,6 +6,11 @@
     --text-main: #334155;
     --text-muted: #64748B;
     --border-color: #E2E8F0;
+    --surface-color: #FFFFFF;
+    --surface-soft: #F8FAFC;
+    --danger-soft: #FEF2F2;
+    --warning-soft: #FFFBEB;
+    --success-soft: #ECFDF5;
 }
 
 body { background-color: var(--bg-body); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--text-main); font-size: 14px; }
@@ -58,7 +63,6 @@ body { background-color: var(--bg-body); font-family: -apple-system, BlinkMacSys
     overflow: hidden;
     white-space: nowrap;
 }
-/* 完美复刻截图中的边框圆角按钮 */
 .sidebar-toggle-btn {
     background: #FFFFFF; border: 1px solid var(--border-color); color: var(--text-muted);
     width: 36px; height: 36px; border-radius: 8px;
@@ -71,10 +75,9 @@ body { background-color: var(--bg-body); font-family: -apple-system, BlinkMacSys
 /* === 侧边栏折叠状态样式 === */
 .app-sidebar.collapsed { width: 70px; }
 .app-sidebar.collapsed .sidebar-header { padding: 20px 0; justify-content: center; }
-.app-sidebar.collapsed .logo-icon { margin: 0 auto; } /* 彻底解决溢出，强制在70px中间 */
+.app-sidebar.collapsed .logo-icon { margin: 0 auto; }
 .app-sidebar.collapsed .sidebar-text-container { opacity: 0; width: 0; margin-left: 0; }
 
-/* 将选中条变成截图中那样的方形居中块 */
 .app-sidebar.collapsed .nav-item-link {
     justify-content: center;
     padding: 0;
@@ -91,11 +94,12 @@ body { background-color: var(--bg-body); font-family: -apple-system, BlinkMacSys
 .app-main { background-color: var(--bg-body); transition: width 0.3s ease; }
 .container-fluid { padding: 24px 32px !important; }
 .card { background: #fff; border: 1px solid var(--border-color) !important; border-radius: 10px !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
-.card-header { background-color: #fff !important; border-bottom: 1px solid var(--border-color) !important; padding: 16px 20px !important; }
-.card-body { padding: 20px !important; }
+.card-header { background-color: #fff !important; border-bottom: 1px solid var(--border-color) !important; padding: 16px 20px !important; color: var(--text-main) !important; }
+.card-body { padding: 20px !important; color: var(--text-main); }
+.card-footer { background-color: #fff !important; border-top: 1px solid var(--border-color) !important; }
 
-.form-control, .form-select { border-radius: 6px; border: 1px solid var(--border-color); font-size: 14px; padding: 8px 12px; }
-.form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+.form-control, .form-select { border-radius: 6px; border: 1px solid var(--border-color); font-size: 14px; padding: 8px 12px; background-color: #FFFFFF; color: var(--text-main); }
+.form-control:focus, .form-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); background-color: #FFFFFF; color: var(--text-main); }
 
 .btn { border-radius: 6px; font-weight: 500; font-size: 13px; box-shadow: none !important; white-space: nowrap !important; flex-shrink: 0 !important; height: 32px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; }
 .btn-sm { height: 28px; padding: 0 12px; font-size: 12px; }
@@ -103,28 +107,61 @@ body { background-color: var(--bg-body); font-family: -apple-system, BlinkMacSys
 .btn-primary { background-color: var(--primary); border: none; }
 .btn-primary:hover { background-color: var(--primary-hover); }
 
-.table { margin-bottom: 0; }
+.table { margin-bottom: 0; color: var(--text-main); }
 .table th { border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 13px; padding: 12px 16px; font-weight: 600; background: #F8FAFC; }
-.table td { padding: 12px 16px; vertical-align: middle; border-bottom: 1px solid var(--border-color); font-size: 14px; white-space: nowrap; }
+.table td { padding: 12px 16px; vertical-align: middle; border-bottom: 1px solid var(--border-color); font-size: 14px; white-space: nowrap; color: var(--text-main); }
 
-.modal-content { border-radius: 12px !important; border: 1px solid rgba(0,0,0,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
-.modal-header { border-bottom: 0; padding: 20px 24px 10px; }
-.modal-body { padding: 10px 24px 24px; font-size: 15px; color: var(--text-main); }
-.modal-footer { border-top: 0; padding: 0 24px 24px; }
-/* =========================================
-   全局弹窗 (Modal) 丝滑切入动画
-   ========================================= */
+.modal-content { border-radius: 12px !important; border: 1px solid rgba(0,0,0,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.1); background-color: #FFFFFF; color: var(--text-main); }
+.modal-header { border-bottom: 0; padding: 20px 24px 10px; background-color: #FFFFFF; color: var(--text-main); }
+.modal-body { padding: 10px 24px 24px; font-size: 15px; color: var(--text-main); background-color: #FFFFFF; }
+.modal-footer { border-top: 0; padding: 0 24px 24px; background-color: #FFFFFF; }
 .modal.fade .modal-dialog {
-    /* 初始状态：向下偏移 40px，并微微缩小 (0.95倍) */
     transform: translateY(40px) scale(0.95) !important;
-    /* 使用 cubic-bezier 贝塞尔曲线，实现先快后慢的弹性阻尼感 */
     transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 .modal.show .modal-dialog {
-    /* 展开状态：回归原位和原本大小 */
     transform: translateY(0) scale(1) !important;
 }
 .sidebar-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15,23,42, 0.4); z-index: 1030; opacity: 0; visibility: hidden; transition: opacity 0.2s; }
+
+.dropdown-menu {
+    background-color: #FFFFFF;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-main);
+}
+.dropdown-item {
+    color: var(--text-main);
+}
+.dropdown-item:hover {
+    background-color: #F8FAFC;
+    color: var(--text-main);
+}
+
+.toast-login-info { background: rgba(255, 255, 255, 0.98); backdrop-filter: blur(10px); color: var(--text-main); }
+.toast-login-info .toast-header { color: var(--text-main); }
+.toast-login-info .toast-body { color: var(--text-main); }
+
+pre { color: var(--text-main); }
+.text-dark { color: #0F172A !important; }
+.bg-light { background-color: #F8FAFC !important; }
+.bg-white { background-color: #FFFFFF !important; }
+.border { border-color: var(--border-color) !important; }
+.list-group-item { background-color: #FFFFFF; color: var(--text-main); border-color: var(--border-color); }
+
+.pagination .page-link {
+    color: var(--text-main);
+    border-color: var(--border-color);
+    background-color: #FFFFFF;
+}
+.pagination .page-link:hover {
+    background-color: #F8FAFC;
+    color: var(--text-main);
+}
+.pagination .page-item.active .page-link {
+    background-color: var(--primary);
+    border-color: var(--primary);
+    color: #FFFFFF;
+}
 
 /* 移动端适配 */
 @media (max-width: 768px) {
@@ -153,26 +190,252 @@ html.dark-theme {
     --text-main: #F8FAFC;
     --text-muted: #94A3B8;
     --border-color: #334155;
+    --surface-color: #1E293B;
+    --surface-soft: #0F172A;
+    --danger-soft: rgba(220, 38, 38, 0.12);
+    --warning-soft: rgba(217, 119, 6, 0.12);
+    --success-soft: rgba(5, 150, 105, 0.12);
 }
-html.dark-theme .card, html.dark-theme .modal-content, html.dark-theme .card-header, html.dark-theme .card-body { background-color: #1E293B !important; }
+html.dark-theme body,
+html.dark-theme .app-main,
+html.dark-theme .container-fluid {
+    background-color: var(--bg-body) !important;
+    color: var(--text-main);
+}
+html.dark-theme .card,
+html.dark-theme .modal-content,
+html.dark-theme .card-header,
+html.dark-theme .card-body,
+html.dark-theme .card-footer,
+html.dark-theme .modal-header,
+html.dark-theme .modal-body,
+html.dark-theme .modal-footer { background-color: #1E293B !important; color: var(--text-main) !important; border-color: #334155 !important; }
 html.dark-theme .table { color: var(--text-main); }
 html.dark-theme .table th { background-color: #0F172A; border-color: var(--border-color); color: var(--text-muted); }
-html.dark-theme .table td { border-color: var(--border-color); }
-html.dark-theme .bg-white, html.dark-theme .bg-light { background-color: #1E293B !important; }
+html.dark-theme .table td { border-color: var(--border-color); color: var(--text-main); }
+html.dark-theme .bg-white { background-color: #1E293B !important; }
+html.dark-theme .bg-light { background-color: #0F172A !important; }
 html.dark-theme .text-dark { color: #F8FAFC !important; }
-html.dark-theme input.form-control, html.dark-theme select.form-select, html.dark-theme textarea.form-control { background-color: #0F172A; color: #F8FAFC; border-color: #334155; }
-html.dark-theme input.form-control:focus, html.dark-theme select.form-select:focus, html.dark-theme textarea.form-control:focus { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .text-muted,
+html.dark-theme .text-secondary { color: #94A3B8 !important; }
+html.dark-theme input.form-control,
+html.dark-theme select.form-select,
+html.dark-theme textarea.form-control {
+    background-color: #0F172A;
+    color: #F8FAFC;
+    border-color: #334155;
+}
+html.dark-theme input.form-control::placeholder,
+html.dark-theme textarea.form-control::placeholder {
+    color: #64748B;
+}
+html.dark-theme input.form-control:focus,
+html.dark-theme select.form-select:focus,
+html.dark-theme textarea.form-control:focus {
+    background-color: #0F172A;
+    color: #F8FAFC;
+    border-color: #3B82F6;
+}
 html.dark-theme .code-badge { background: #0F172A; color: #E2E8F0; border-color: #334155; }
 html.dark-theme a.code-badge:hover { background-color: #1E40AF; color: #BFDBFE; border-color: #1D4ED8; }
-html.dark-theme .terminal-header { background: #0F172A !important; }
-html.dark-theme pre { background-color: #1E293B !important; color: #E2E8F0 !important; }
+html.dark-theme .terminal-header { background: #0F172A !important; color: #94A3B8 !important; border-color: #334155 !important; }
+html.dark-theme pre { background-color: transparent !important; color: #E2E8F0 !important; }
 html.dark-theme .sidebar-toggle-btn { background: #1E293B; border-color: #334155; color: #94A3B8; }
 html.dark-theme .sidebar-toggle-btn:hover { background-color: #0F172A; border-color: #475569; color: #F8FAFC; }
 html.dark-theme .dropdown-menu { background-color: #1E293B; border: 1px solid #334155 !important; }
 html.dark-theme .dropdown-item { color: #F8FAFC; }
-html.dark-theme .dropdown-item:hover { background-color: #0F172A; }
-
-/* 上次登录信息弹窗自适应 */
-.toast-login-info { background: rgba(255, 255, 255, 0.98); backdrop-filter: blur(10px); }
+html.dark-theme .dropdown-item:hover { background-color: #0F172A; color: #F8FAFC; }
+html.dark-theme .dropdown-divider { border-top-color: #334155; }
+html.dark-theme .btn-light {
+    background-color: #0F172A !important;
+    border-color: #334155 !important;
+    color: #F8FAFC !important;
+}
+html.dark-theme .btn-outline-primary,
+html.dark-theme .btn-outline-success,
+html.dark-theme .btn-outline-danger,
+html.dark-theme .btn-outline-warning {
+    background-color: transparent !important;
+}
+html.dark-theme .list-group-item {
+    background-color: #1E293B !important;
+    color: #F8FAFC !important;
+    border-color: #334155 !important;
+}
+html.dark-theme .list-group-item.active {
+    background-color: #2563EB !important;
+    border-color: #2563EB !important;
+    color: #FFFFFF !important;
+}
+html.dark-theme .pagination .page-link {
+    background-color: #1E293B !important;
+    border-color: #334155 !important;
+    color: #94A3B8 !important;
+}
+html.dark-theme .pagination .page-link:hover {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+}
+html.dark-theme .pagination .page-item.active .page-link {
+    background-color: #3B82F6 !important;
+    border-color: #3B82F6 !important;
+    color: #fff !important;
+}
+html.dark-theme .pagination .page-item.disabled .page-link {
+    background-color: #1E293B !important;
+    color: #475569 !important;
+}
 html.dark-theme .toast-login-info { background: rgba(30, 41, 59, 0.98); color: var(--text-main); }
 html.dark-theme .toast-login-info .text-dark { color: #F8FAFC !important; }
+html.dark-theme .toast,
+html.dark-theme .toast-header,
+html.dark-theme .toast-body {
+    background-color: #1E293B !important;
+    color: #F8FAFC !important;
+    border-color: #334155 !important;
+}
+html.dark-theme .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
+}
+html.dark-theme .form-check-input {
+    background-color: #0F172A;
+    border-color: #475569;
+}
+html.dark-theme .form-check-input:checked {
+    background-color: #3B82F6;
+    border-color: #3B82F6;
+}
+html.dark-theme .form-control,
+html.dark-theme .form-select,
+html.dark-theme textarea,
+html.dark-theme input,
+html.dark-theme select {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+    border-color: #334155 !important;
+}
+
+html.dark-theme .form-control:focus,
+html.dark-theme .form-select:focus,
+html.dark-theme textarea:focus,
+html.dark-theme input:focus,
+html.dark-theme select:focus {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+    border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.15) !important;
+}
+
+html.dark-theme .form-control::placeholder,
+html.dark-theme textarea::placeholder,
+html.dark-theme input::placeholder {
+    color: #64748B !important;
+}
+
+html.dark-theme .input-group-text {
+    background-color: #0F172A !important;
+    color: #94A3B8 !important;
+    border-color: #334155 !important;
+}
+
+html.dark-theme .bg-light {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+}
+
+html.dark-theme .bg-white {
+    background-color: #1E293B !important;
+    color: #F8FAFC !important;
+}
+
+html.dark-theme label,
+html.dark-theme .form-label {
+    color: #94A3B8 !important;
+}
+
+html.dark-theme .card-header .form-control,
+html.dark-theme .card-header .form-select,
+html.dark-theme .card-footer .form-control,
+html.dark-theme .card-footer .form-select {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+    border-color: #334155 !important;
+}
+html.dark-theme .table-responsive {
+    background-color: #1E293B !important;
+}
+
+html.dark-theme table,
+html.dark-theme .table,
+html.dark-theme .table > :not(caption) > * > * {
+    background-color: #1E293B !important;
+    color: #F8FAFC !important;
+    border-color: #334155 !important;
+}
+
+html.dark-theme .table tbody,
+html.dark-theme .table thead,
+html.dark-theme .table tfoot,
+html.dark-theme .table tr {
+    background-color: #1E293B !important;
+}
+
+html.dark-theme .table td,
+html.dark-theme .table th {
+    background-color: #1E293B !important;
+    color: #F8FAFC !important;
+    border-color: #334155 !important;
+}
+
+html.dark-theme .table-hover > tbody > tr:hover > * {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+}
+
+html.dark-theme .table-light,
+html.dark-theme .table-light > th,
+html.dark-theme .table-light > td {
+    background-color: #1E293B !important;
+    color: #F8FAFC !important;
+}
+
+html.dark-theme .card,
+html.dark-theme .card-body,
+html.dark-theme .card-footer,
+html.dark-theme .card-header {
+    background-color: #1E293B !important;
+    color: #F8FAFC !important;
+}
+
+html.dark-theme .form-control,
+html.dark-theme .form-select,
+html.dark-theme input,
+html.dark-theme select,
+html.dark-theme textarea {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+    border-color: #334155 !important;
+}
+
+html.dark-theme .form-control:focus,
+html.dark-theme .form-select:focus,
+html.dark-theme input:focus,
+html.dark-theme select:focus,
+html.dark-theme textarea:focus {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+    border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.15) !important;
+}
+
+html.dark-theme .form-control::placeholder,
+html.dark-theme textarea::placeholder,
+html.dark-theme input::placeholder {
+    color: #64748B !important;
+}
+
+html.dark-theme .input-group-text {
+    background-color: #0F172A !important;
+    color: #94A3B8 !important;
+    border-color: #334155 !important;
+}

@@ -13,11 +13,15 @@
     <a href="/?status=disabled&per_page={{ per_page }}" class="pill {% if status_filter == 'disabled' and source_filter == 'all' %}active{% endif %}">禁用</a>
 </div>
 
+<div class="px-3 pb-2">
+    <div class="text-muted small bg-white border rounded-3 px-3 py-2" id="queueCountBadge">当前队列长度：{{ queued_count }}</div>
+</div>
+
 <div class="filter-pills">
     {% for view in source_views %}
     <a href="/?source={{ view.source_key }}&per_page={{ per_page }}" class="pill {% if source_filter == view.source_key %}active{% endif %}">{{ view.name }}</a>
     {% endfor %}
-    <button type="button" class="pill border-0" style="background:#fff;" onclick="openTaskViewSheet()">视图管理</button>
+    <button type="button" class="pill pill-action" onclick="openTaskViewSheet()">视图管理</button>
 </div>
 
 <div class="accordion-list">
@@ -25,11 +29,11 @@
     <div class="task-item" id="item-{{ task.id }}">
         <div class="task-row" onclick="document.getElementById('item-{{ task.id }}').classList.toggle('expanded')">
             <div class="task-info">
-                <div class="status-ring {% if task.is_disabled == 1 %}disabled{% elif task.status == 'Running' %}running{% elif task.status == 'Error' %}error{% else %}idle{% endif %}" id="ring-{{ task.id }}"></div>
+                <div class="status-ring {% if task.is_disabled == 1 %}disabled{% elif task.status == 'Queued' %}running{% elif task.status == 'Running' %}running{% elif task.status == 'Error' %}error{% else %}idle{% endif %}" id="ring-{{ task.id }}"></div>
                 <div class="task-name">{{ task.name }}</div>
             </div>
             <div id="quick-action-{{ task.id }}">
-                {% if task.status == 'Running' %}
+                {% if task.status == 'Running' or task.status == 'Queued' %}
                 <button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask({{ task.id }})"><i class="bi bi-stop-fill"></i></button>
                 {% else %}
                 <button class="btn-quick-run" onclick="event.stopPropagation(); runTask({{ task.id }})"><i class="bi bi-play-fill"></i></button>
@@ -40,9 +44,24 @@
         <div class="task-detail-panel" id="panel-{{ task.id }}">
             <div class="detail-text"><i class="bi bi-terminal me-1"></i>{{ task.command }}</div>
             <div class="detail-text"><i class="bi bi-stopwatch me-1"></i>{{ task.cron }}</div>
+            <div class="detail-text" id="status-text-{{ task.id }}">
+                <i class="bi bi-activity me-1"></i>
+                {% if task.is_disabled == 1 %}
+                    已禁用
+                {% elif task.status == 'Queued' %}
+                    排队中
+                {% elif task.status == 'Running' %}
+                    运行中
+                {% elif task.status == 'Error' %}
+                    出错
+                {% else %}
+                    空闲
+                {% endif %}
+            </div>
             
             <div class="action-group">
                 <button class="btn-action" onclick="toggleTerminal({{ task.id }})"><i class="bi bi-card-text me-1"></i>日志</button>
+                <button class="btn-action" onclick='openEditTaskModal({{ task.id }}, {{ task.name | tojson }}, {{ task.command | tojson }}, {{ task.cron | tojson }})'><i class="bi bi-pencil-square me-1"></i>编辑</button>
                 <a class="btn-action" href="/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
                 <button class="btn-action text-danger" onclick="if(confirm('删除此任务？')) window.location.href='/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
             </div>
@@ -93,17 +112,44 @@
 <div class="modal fade" id="addTaskModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered mx-3">
         <form class="modal-content border-0 rounded-4" method="POST" action="/task/add">
+            <input type="hidden" name="page" value="{{ pagination.page }}">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
+            <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
+            <input type="hidden" name="source" value="{{ source_filter }}">
             <div class="modal-header border-0 pb-0">
                 <h6 class="modal-title fw-bold">新增任务</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <input type="text" name="name" class="form-control bg-light border-0 p-3 mb-3 rounded-3" placeholder="任务名称" required>
-                <input type="text" name="command" class="form-control bg-light border-0 p-3 mb-3 rounded-3 font-monospace" placeholder="执行指令 (如 test.py)" required>
-                <input type="text" name="cron" class="form-control bg-light border-0 p-3 mb-2 rounded-3 font-monospace" value="0 9 * * *" required>
+                <input type="text" name="name" class="form-control mobile-modal-input p-3 mb-3 rounded-3" placeholder="任务名称" required>
+<input type="text" name="command" class="form-control mobile-modal-input p-3 mb-3 rounded-3 font-monospace" placeholder="执行指令 (如 test.py)" required>
+<input type="text" name="cron" class="form-control mobile-modal-input p-3 mb-2 rounded-3 font-monospace" value="0 9 * * *" required>
             </div>
             <div class="modal-footer border-0 pt-0">
                 <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保 存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="editTaskModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered mx-3">
+        <form class="modal-content border-0 rounded-4" id="editTaskForm" method="POST">
+            <input type="hidden" name="page" value="{{ pagination.page }}">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
+            <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
+            <input type="hidden" name="source" value="{{ source_filter }}">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold">编辑任务</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="text" name="name" id="edit_task_name" class="form-control mobile-modal-input p-3 mb-3 rounded-3" placeholder="任务名称" required>
+<input type="text" name="command" id="edit_task_command" class="form-control mobile-modal-input p-3 mb-3 rounded-3 font-monospace" placeholder="执行指令" required>
+<input type="text" name="cron" id="edit_task_cron" class="form-control mobile-modal-input p-3 mb-2 rounded-3 font-monospace" placeholder="Cron 表达式" required>
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">更 新</button>
             </div>
         </form>
     </div>
@@ -116,15 +162,32 @@
     let activeTerminalId = null;
     let taskViewSheet = null;
     let taskViewChanged = false;
+    let editTaskModal = null;
 
     document.addEventListener('DOMContentLoaded', function() {
         taskViewSheet = new bootstrap.Offcanvas(document.getElementById('taskViewSheet'));
+        editTaskModal = new bootstrap.Modal(document.getElementById('editTaskModal'));
         document.getElementById('taskViewSheet').addEventListener('hidden.bs.offcanvas', function() {
             if (taskViewChanged) {
                 location.reload();
             }
         });
     });
+
+    function updateQueueCount(count) {
+        const badge = document.getElementById('queueCountBadge');
+        if (badge) {
+            badge.innerText = `当前队列长度：${count}`;
+        }
+    }
+
+    function openEditTaskModal(id, name, command, cron) {
+        document.getElementById('editTaskForm').action = `/task/edit/${id}`;
+        document.getElementById('edit_task_name').value = name;
+        document.getElementById('edit_task_command').value = command;
+        document.getElementById('edit_task_cron').value = cron;
+        editTaskModal.show();
+    }
 
     function openTaskViewSheet() {
         taskViewChanged = false;
@@ -198,11 +261,15 @@
             if (data.status === 'success') {
                 const ring = document.getElementById(`ring-${id}`);
                 const quickWrap = document.getElementById(`quick-action-${id}`);
+                const statusText = document.getElementById(`status-text-${id}`);
                 if (ring) {
                     ring.className = 'status-ring running';
                 }
                 if (quickWrap) {
                     quickWrap.innerHTML = `<button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask(${id})"><i class="bi bi-stop-fill"></i></button>`;
+                }
+                if (statusText) {
+                    statusText.innerHTML = `<i class="bi bi-activity me-1"></i>排队中`;
                 }
             } else {
                 alert(data.msg || '启动失败');
@@ -218,11 +285,15 @@
                 if (data.status === 'success') {
                     const ring = document.getElementById(`ring-${id}`);
                     const quickWrap = document.getElementById(`quick-action-${id}`);
+                    const statusText = document.getElementById(`status-text-${id}`);
                     if (ring) {
                         ring.className = 'status-ring idle';
                     }
                     if (quickWrap) {
                         quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
+                    }
+                    if (statusText) {
+                        statusText.innerHTML = `<i class="bi bi-activity me-1"></i>空闲`;
                     }
                 } else {
                     alert(data.msg || '停止失败');
@@ -256,18 +327,29 @@
         }
     });
 
+    socket.on('queue_status', function(msg) {
+        updateQueueCount(msg.queued_count || 0);
+    });
+
     socket.on('task_status', function(msg) {
         const id = msg.task_id;
         const ring = document.getElementById(`ring-${id}`);
         const quickWrap = document.getElementById(`quick-action-${id}`);
+        const statusText = document.getElementById(`status-text-${id}`);
         if(!ring || !quickWrap) return;
         
-        if(msg.status === 'Running') {
+        if(msg.status === 'Queued') {
             ring.className = 'status-ring running';
             quickWrap.innerHTML = `<button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask(${id})"><i class="bi bi-stop-fill"></i></button>`;
+            if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>排队中`;
+        } else if(msg.status === 'Running') {
+            ring.className = 'status-ring running';
+            quickWrap.innerHTML = `<button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask(${id})"><i class="bi bi-stop-fill"></i></button>`;
+            if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>运行中`;
         } else {
             ring.className = msg.status === 'Idle' ? 'status-ring idle' : 'status-ring error';
             quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
+            if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>${msg.status === 'Idle' ? '空闲' : '出错'}`;
         }
     });
 </script>

@@ -42,7 +42,8 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         <button class="btn btn-light border btn-sm" onclick="openTaskViewModal()"><i class="bi bi-sliders me-1"></i>视图管理</button>
     </div>
 
-    <div>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="badge rounded-pill text-bg-light border" style="font-size: 12px;" id="queueCountBadge">当前队列长度：{{ queued_count }}</span>
         <button class="btn btn-outline-primary btn-sm me-2" data-bs-toggle="dropdown">批量操作 <i class="bi bi-caret-down-fill"></i></button>
         <ul class="dropdown-menu">
             <li><a class="dropdown-item" href="javascript:void(0);" onclick="batchAction('run')"><i class="bi bi-play-fill text-success"></i> 运行选中</a></li>
@@ -89,6 +90,8 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                         <td class="text-center" id="status-col-{{ task.id }}">
                             {% if task.is_disabled == 1 %}
                                 <span class="badge-soft badge-soft-warning">已禁用</span>
+                            {% elif task.status == 'Queued' %}
+                                <span class="badge-soft" style="background:#EDE9FE;color:#7C3AED;">排队中</span>
                             {% elif task.status == 'Running' %}
                                 <span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>
                             {% elif task.status == 'Error' %}
@@ -104,6 +107,8 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                                 <span id="run-btn-wrap-{{ task.id }}">
                                     {% if task.status == 'Running' %}
                                         <button class="action-link text-danger" onclick="stopTask({{ task.id }})">停止</button>
+                                    {% elif task.status == 'Queued' %}
+                                        <button class="action-link text-danger" onclick="stopTask({{ task.id }})">取消</button>
                                     {% else %}
                                         <button class="action-link" onclick='runTask({{ task.id }}, {{ task.name | tojson }})'>运行</button>
                                     {% endif %}
@@ -274,6 +279,13 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 
     function cleanTerminalOutput(text) { return text ? text.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '') : ""; }
 
+    function updateQueueCount(count) {
+        const badge = document.getElementById('queueCountBadge');
+        if (badge) {
+            badge.innerText = `当前队列长度：${count}`;
+        }
+    }
+
     function openLogModal(taskId, taskName) {
         currentListeningTaskId = taskId;
         document.getElementById('logModalTitle').innerText = taskName;
@@ -296,13 +308,13 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                 const durationCol = document.getElementById(`duration-col-${taskId}`);
                 const lastRunCol = document.getElementById(`lastrun-col-${taskId}`);
                 if (statusCol) {
-                    statusCol.innerHTML = `<span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>`;
+                    statusCol.innerHTML = `<span class="badge-soft" style="background:#EDE9FE;color:#7C3AED;">排队中</span>`;
                 }
                 if (runBtnWrap) {
-                    runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">停止</button>`;
+                    runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">取消</button>`;
                 }
                 if (durationCol) {
-                    durationCol.innerText = "执行中...";
+                    durationCol.innerText = "排队中...";
                 }
                 if (lastRunCol) {
                     const now = new Date();
@@ -318,7 +330,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
     }
 
     function stopTask(taskId) {
-        window.sysConfirm('确定中断该任务吗？', () => {
+        window.sysConfirm('确定中断/取消该任务吗？', () => {
             fetch(`/api/task/stop/${taskId}`).then(res => res.json()).then(data => {
                 if (data.status === 'success') {
                     const statusCol = document.getElementById(`status-col-${taskId}`);
@@ -440,6 +452,10 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         }
     });
 
+    socket.on('queue_status', function(msg) {
+        updateQueueCount(msg.queued_count || 0);
+    });
+
     socket.on('task_status', function(msg) {
         const taskId = msg.task_id, status = msg.status;
         const statusCol = document.getElementById(`status-col-${taskId}`);
@@ -449,7 +465,12 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         if (!statusCol || !runBtnWrap) return;
         const safeName = document.getElementById(`row-${taskId}`).cells[2].innerText.replace(/'/g, "\\'").replace(/"/g, '&quot;');
         if(statusCol.innerHTML.indexOf('已禁用') === -1) {
-            if (status === 'Running') {
+            if (status === 'Queued') {
+                statusCol.innerHTML = `<span class="badge-soft" style="background:#EDE9FE;color:#7C3AED;">排队中</span>`;
+                runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">取消</button>`;
+                if (durationCol) durationCol.innerText = "排队中...";
+                if (lastRunCol && msg.last_run) lastRunCol.innerText = msg.last_run;
+            } else if (status === 'Running') {
                 statusCol.innerHTML = `<span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>`;
                 runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">停止</button>`;
                 if (durationCol) durationCol.innerText = "执行中...";

@@ -9,7 +9,6 @@
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0;
-    /* 缩小上下边距，使头部更紧凑 */
     padding: 8px 16px;
     background: transparent;
     transition: all 0.2s;
@@ -29,4 +28,22 @@
     font-weight: 500;
     border-radius: 4px;
     font-size: 12px;
+}
+
+html.dark-theme .settings-tabs {
+    border-bottom-color: var(--border-color);
+}
+html.dark-theme .settings-tabs .nav-link {
+    color: var(--text-muted);
+    background: transparent;
+}
+html.dark-theme .settings-tabs .nav-link:hover {
+    color: var(--text-main);
+}
+html.dark-theme .settings-tabs .nav-link.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+html.dark-theme .badge-soft-status {
+    border: 1px solid transparent;
 }

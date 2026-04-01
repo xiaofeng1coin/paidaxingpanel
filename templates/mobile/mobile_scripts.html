@@ -21,11 +21,40 @@
     </select>
 </div>
 
+<input type="file" id="scriptUploadInput" accept=".js,.py,.sh" style="display:none;" onchange="uploadScriptFile(this)">
+
 <div class="editor-wrapper">
     <div id="monaco-editor"></div>
 </div>
 
-<button class="fab-save" onclick="saveScript()"><i class="bi bi-floppy-fill"></i> 保存</button>
+<div class="fab-actions">
+    <button class="fab-mini fab-upload" type="button" onclick="openCreateScriptModal()"><i class="bi bi-plus-lg"></i> 新建</button>
+    <button class="fab-mini fab-upload" type="button" onclick="document.getElementById('scriptUploadInput').click()"><i class="bi bi-upload"></i> 上传</button>
+    <button class="fab-save" onclick="saveScript()"><i class="bi bi-floppy-fill"></i> 保存</button>
+</div>
+
+<div class="modal fade" id="createScriptModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered mx-3">
+        <form class="modal-content border-0 rounded-4" id="createScriptForm">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold">新建脚本</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <select id="new_script_type" class="form-select mobile-modal-input p-3 mb-3 rounded-3" required>
+                    <option value="py">Python (.py)</option>
+                    <option value="js">JavaScript (.js)</option>
+                    <option value="sh">Shell (.sh)</option>
+                </select>
+                <input type="text" id="new_script_name" class="form-control mobile-modal-input p-3 mb-2 rounded-3" placeholder="请输入脚本名称，不要带后缀" required>
+                <div class="text-muted small">默认保存到 scripts 根目录</div>
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">确定创建</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <form id="saveForm" method="POST" style="display:none;">
     <input type="hidden" name="filename" value="{{ current_file }}">
@@ -42,6 +71,7 @@
 <script>
     require.config({ paths: { 'vs': "{{ url_for('static', filename='vendor/monaco-editor/min/vs') }}" }});
     let editor;
+    let createScriptModal = null;
 
     let lang = 'plaintext';
     const filename = "{{ current_file_name }}";
@@ -52,11 +82,21 @@
     let safeContent = "";
     try { safeContent = JSON.parse(document.getElementById('raw-script-content').textContent); } catch(e) {}
 
+    document.addEventListener('DOMContentLoaded', function() {
+        createScriptModal = new bootstrap.Modal(document.getElementById('createScriptModal'));
+
+        document.getElementById('createScriptForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            createNewScript();
+        });
+    });
+
     require(['vs/editor/editor.main'], function () {
+        const theme = document.documentElement.classList.contains('dark-theme') ? 'vs-dark' : 'vs';
         editor = monaco.editor.create(document.getElementById('monaco-editor'), {
             value: safeContent,
             language: lang,
-            theme: 'vs', 
+            theme: theme,
             automaticLayout: true,
             fontSize: 13, 
             minimap: { enabled: false }, 
@@ -69,6 +109,69 @@
         if(!editor) return;
         document.getElementById('hiddenContent').value = editor.getValue();
         document.getElementById('saveForm').submit();
+    }
+
+    function uploadScriptFile(input) {
+        if (!input.files || !input.files[0]) return;
+        const file = input.files[0];
+        const name = file.name || '';
+        const lowerName = name.toLowerCase();
+
+        if (!(lowerName.endsWith('.js') || lowerName.endsWith('.py') || lowerName.endsWith('.sh'))) {
+            alert('仅支持上传 js、py、sh 文件');
+            input.value = '';
+            return;
+        }
+
+        const fd = new FormData();
+        fd.append('file', file);
+
+        fetch('/api/scripts/upload', {
+            method: 'POST',
+            body: fd
+        }).then(res => res.json()).then(data => {
+            if (data.status === 'success') {
+                alert(data.msg || '上传成功');
+                window.location.href = '/scripts?file=' + encodeURIComponent(data.filename);
+            } else {
+                alert(data.msg || '上传失败');
+            }
+        }).catch(() => {
+            alert('上传请求失败');
+        }).finally(() => {
+            input.value = '';
+        });
+    }
+
+    function openCreateScriptModal() {
+        document.getElementById('new_script_type').value = 'py';
+        document.getElementById('new_script_name').value = '';
+        createScriptModal.show();
+        setTimeout(() => {
+            document.getElementById('new_script_name').focus();
+        }, 200);
+    }
+
+    function createNewScript() {
+        let type = document.getElementById('new_script_type').value;
+        let name = document.getElementById('new_script_name').value.trim();
+
+        if (!['js', 'py', 'sh'].includes(type)) {
+            alert('脚本类型仅支持 js、py、sh');
+            return;
+        }
+        if (!name) {
+            alert('脚本名称不能为空');
+            return;
+        }
+        if (!/^[A-Za-z0-9_\-\u4e00-\u9fa5]+$/.test(name)) {
+            alert('脚本名称仅支持中文、字母、数字、下划线、中划线');
+            return;
+        }
+
+        const filename = `${name}.${type}`;
+        createScriptModal.hide();
+        window.location.href = '/scripts?file=' + encodeURIComponent(filename);
     }
 </script>
 {% endblock %}

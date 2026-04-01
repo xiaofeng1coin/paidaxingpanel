@@ -2,7 +2,6 @@
 
 {% block styles %}
 <style>
-/* 原生经典虚线树状图 CSS */
 .log-tree { list-style: none; padding: 0; margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
 .tree-folder { margin-bottom: 6px; }
 .tree-folder-header { cursor: pointer; display: flex; align-items: center; padding: 4px 8px; border-radius: 4px; color: var(--text-main); font-size: 14px; transition: background 0.2s; }
@@ -10,11 +9,9 @@
 .tree-folder-header i { font-size: 14px; margin-right: 8px; color: #64748B; }
 
 .tree-files { list-style: none; padding: 0 0 0 12px; margin: 0; position: relative; }
-/* 绘制贯穿文件的垂直虚线 */
 .tree-files::before { content: ''; position: absolute; top: 0; bottom: 14px; left: 14px; border-left: 1px dashed #CBD5E1; }
 
 .tree-file { position: relative; padding: 2px 0 2px 14px; }
-/* 绘制指向文件的水平虚线 */
 .tree-file::before { content: ''; position: absolute; top: 16px; left: 2px; width: 10px; border-top: 1px dashed #CBD5E1; }
 
 .tree-file a { display: flex; align-items: center; text-decoration: none; color: var(--text-muted); font-size: 13px; padding: 6px 8px; border-radius: 4px; transition: all 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -26,9 +23,8 @@ html.dark-theme .tree-files::before, html.dark-theme .tree-file::before { border
 html.dark-theme .tree-file a:hover { background-color: #0F172A; color: #F8FAFC; }
 html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1); color: #38BDF8; }
 
-/* 纯净白底日志块 */
 .log-content-pre { background-color: #FFFFFF; color: #334155; border: none; }
-html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0; }
+html.dark-theme .log-content-pre { background-color: transparent !important; color: #E2E8F0 !important; }
 </style>
 {% endblock %}
 
@@ -38,7 +34,6 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
 </div>
 
 <div class="row g-3 h-100" style="min-height: calc(100vh - 120px);">
-    <!-- 左侧日志树：固定宽度 220px，紧凑清爽 -->
     <div class="col-md-auto" style="width: 220px;">
         <div class="card border-0 h-100">
             <div class="card-header bg-white border-bottom"><h6 class="mb-0 fw-bold"><i class="bi bi-folder2-open me-2"></i>日志目录</h6></div>
@@ -47,7 +42,6 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
                     {% for folder, files in tree.items() %}
                     <li class="tree-folder">
                         <div class="tree-folder-header" onclick="toggleTree(this)">
-                            <!-- 根据展开状态渲染 [+] 或 [-] -->
                             <i class="bi {% if current_folder == folder %}bi-dash-square{% else %}bi-plus-square{% endif %}"></i>
                             <span class="folder-name">{{ folder }}</span>
                         </div>
@@ -72,7 +66,6 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
         </div>
     </div>
 
-    <!-- 右侧内容展示：移除暗色背景，适配全局主题 -->
     <div class="col d-flex flex-column" style="min-width: 0;">
         <div class="card border-0 flex-grow-1 h-100">
             <div class="card-header bg-light border-bottom">
@@ -85,9 +78,7 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
                     {% endif %}
                 </h6>
             </div>
-            <!-- 去除了原有的 bg-dark 类 -->
             <div class="card-body p-0 position-relative bg-transparent h-100" style="border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; overflow:hidden;">
-                <!-- 加入了 log-content-pre 类去控制纯白底色黑字 -->
                 <pre class="m-0 p-3 h-100 font-monospace log-content-pre" style="overflow-y: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.6; height: calc(100vh - 180px); min-height: 0;">{{ content }}</pre>
             </div>
         </div>
@@ -97,7 +88,6 @@ html.dark-theme .log-content-pre { background-color: transparent; color: #E2E8F0
 
 {% block scripts %}
 <script>
-    // 树状图展开折叠与图标切换逻辑
     function toggleTree(element) {
         const icon = element.querySelector('i.bi');
         const childUl = element.nextElementSibling;

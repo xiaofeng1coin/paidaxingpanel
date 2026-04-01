@@ -309,10 +309,12 @@ html.dark-theme #update_log_container { background-color: #0F172A !important; bo
 
             <div class="mb-3">
                 <label class="form-label text-muted small">数据备份还原</label>
-                <div class="d-flex gap-2" style="max-width: 250px;">
+                <div class="d-flex gap-2" style="max-width: 420px;">
                     <a href="/api/settings/backup" class="btn btn-primary flex-fill d-flex justify-content-center align-items-center">数据备份</a>
-                    <button class="btn btn-light border flex-fill d-flex justify-content-center align-items-center" onclick="alert('请通过覆盖服务器主目录下的 [ data ] 文件夹进行手动还原')">还原数据</button>
+                    <button class="btn btn-light border flex-fill d-flex justify-content-center align-items-center" onclick="document.getElementById('restoreBackupInput').click()">还原数据</button>
                 </div>
+                <input type="file" id="restoreBackupInput" accept=".zip" style="display:none;" onchange="restoreBackup(this)">
+                <div class="text-muted mt-2" style="font-size: 12px;">请选择通过系统“数据备份”导出的 zip 压缩包进行还原，还原完成后系统会自动重启。</div>
             </div>
 
             <div>
@@ -586,6 +588,35 @@ html.dark-theme #update_log_container { background-color: #0F172A !important; bo
         });
     }
 
+    function restoreBackup(input) {
+        if (!input.files || !input.files[0]) return;
+        const file = input.files[0];
+        if (!file.name.toLowerCase().endsWith('.zip')) {
+            window.alert('仅支持选择 zip 备份文件');
+            input.value = '';
+            return;
+        }
+
+        window.sysConfirm(`确定要使用备份文件 [ ${file.name} ] 进行还原吗？\n此操作会覆盖当前数据，并在完成后自动重启系统。`, () => {
+            const fd = new FormData();
+            fd.append('file', file);
+
+            fetch('/api/settings/restore', {
+                method: 'POST',
+                body: fd
+            }).then(res => res.json()).then(data => {
+                window.alert(data.msg || (data.status === 'success' ? '还原任务已提交' : '还原失败'));
+                if (data.status === 'success') {
+                    setTimeout(() => location.reload(), 4000);
+                }
+            }).catch(() => {
+                window.alert('还原请求失败，请稍后重试');
+            }).finally(() => {
+                input.value = '';
+            });
+        });
+    }
+
     function checkUpdate() {
         fetch('/api/update/check').then(res => res.json()).then(data => {
             if(data.status === 'update_available') {
@@ -726,6 +757,8 @@ html.dark-theme #update_log_container { background-color: #0F172A !important; bo
                     document.getElementById('cancelUpdateBtn').style.display = 'inline-block';
                     document.getElementById('cancelUpdateBtn').innerText = '关闭';
                 }
+            } else if (msg.task_id === 'sys_restore') {
+                window.alert(msg.data || '数据还原完成，系统即将重启');
             }
         });
 

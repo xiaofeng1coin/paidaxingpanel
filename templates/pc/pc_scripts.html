@@ -18,10 +18,54 @@
 .tree-file a:hover { background-color: #F1F5F9; color: var(--text-main); }
 .tree-file a.active { background-color: #E0F2FE; color: #0284C7; font-weight: 600; }
 
+.script-file-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.script-file-title { min-width: 0; flex: 1; }
+.script-file-buttons { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+
+.btn-script-create {
+    background: linear-gradient(135deg, #2563EB 0%, #3B82F6 100%) !important;
+    border: none !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.22) !important;
+}
+.btn-script-create:hover {
+    background: linear-gradient(135deg, #1D4ED8 0%, #2563EB 100%) !important;
+    color: #FFFFFF !important;
+    transform: translateY(-1px);
+}
+.btn-script-upload {
+    background: linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%) !important;
+    border: none !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.22) !important;
+}
+.btn-script-upload:hover {
+    background: linear-gradient(135deg, #D97706 0%, #F59E0B 100%) !important;
+    color: #FFFFFF !important;
+    transform: translateY(-1px);
+}
+
 html.dark-theme .tree-folder-header:hover { background-color: #0F172A; }
 html.dark-theme .tree-files::before, html.dark-theme .tree-file::before { border-color: #475569; }
 html.dark-theme .tree-file a:hover { background-color: #0F172A; color: #F8FAFC; }
 html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1); color: #38BDF8; }
+
+html.dark-theme .btn-script-create {
+    background: linear-gradient(135deg, #2563EB 0%, #3B82F6 100%) !important;
+    color: #FFFFFF !important;
+}
+html.dark-theme .btn-script-create:hover {
+    background: linear-gradient(135deg, #1D4ED8 0%, #2563EB 100%) !important;
+    color: #FFFFFF !important;
+}
+html.dark-theme .btn-script-upload {
+    background: linear-gradient(135deg, #D97706 0%, #F59E0B 100%) !important;
+    color: #FFFFFF !important;
+}
+html.dark-theme .btn-script-upload:hover {
+    background: linear-gradient(135deg, #B45309 0%, #D97706 100%) !important;
+    color: #FFFFFF !important;
+}
 </style>
 {% endblock %}
 
@@ -33,7 +77,10 @@ html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1);
 <div class="row g-3 h-100" style="min-height: calc(100vh - 120px);">
     <div class="col-md-auto" style="width: 220px;">
         <div class="card border-0 h-100">
-            <div class="card-header bg-white border-bottom"><h6 class="mb-0 fw-bold">文件列表</h6></div>
+            <div class="card-header bg-white border-bottom">
+                <h6 class="mb-0 fw-bold">文件列表</h6>
+                <input type="file" id="scriptUploadInput" accept=".js,.py,.sh" style="display:none;" onchange="uploadScriptFile(this)">
+            </div>
             <div class="card-body p-2" style="overflow-y: auto; height: calc(100vh - 180px);">
                 <ul class="log-tree">
                     {% for folder, files in tree.items() %}
@@ -59,19 +106,19 @@ html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1);
         </div>
     </div>
 
-    <!-- 右侧编辑器 -->
     <div class="col d-flex flex-column" style="min-width: 0;">
         <div class="card border-0 flex-grow-1 h-100 d-flex flex-column">
             <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center">
-                <h6 class="mb-0 fw-medium font-monospace text-primary text-truncate" style="max-width: 50%;"><i class="bi bi-code-square me-2"></i>{{ current_file }}</h6>
-                <div class="d-flex flex-nowrap gap-2">
+                <h6 class="mb-0 fw-medium font-monospace text-primary text-truncate" style="max-width: 35%;"><i class="bi bi-code-square me-2"></i>{{ current_file }}</h6>
+                <div class="script-file-buttons">
+                    <button type="button" class="btn btn-sm btn-script-create" onclick="openCreateScriptModal()"><i class="bi bi-plus-lg me-1"></i>新建</button>
+                    <button type="button" class="btn btn-sm btn-script-upload" onclick="document.getElementById('scriptUploadInput').click()"><i class="bi bi-upload me-1"></i>上传</button>
                     <button type="button" class="btn btn-primary btn-sm" onclick="saveScript()"><i class="bi bi-floppy me-1"></i>保存脚本</button>
                     <a href="/scripts/debug?file={{ current_file }}" class="btn btn-outline-success btn-sm"><i class="bi bi-play-circle me-1"></i>进入调试</a>
                     <button type="button" class="btn btn-outline-warning btn-sm" onclick="checkSyntax()"><i class="bi bi-bug me-1"></i>语法检查</button>
                 </div>
             </div>
             
-            <!-- 核心修复：添加 min-height 兜底，并使用绝对定位彻底解决 Monaco Editor 100% 高度塌陷为白屏的问题 -->
             <div class="card-body p-0 position-relative flex-grow-1" style="min-height: 500px; overflow: hidden; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;">
                 <div id="monaco-editor" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0;"></div>
                 <form id="saveForm" method="POST" style="display:none;">
@@ -83,6 +130,36 @@ html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1);
     </div>
 </div>
 
+<div class="modal fade" id="createScriptModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" id="createScriptForm">
+            <div class="modal-header border-bottom">
+                <h6 class="modal-title fw-bold">新建脚本</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4">
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-medium">脚本类型</label>
+                    <select id="new_script_type" class="form-select" required>
+                        <option value="py">Python (.py)</option>
+                        <option value="js">JavaScript (.js)</option>
+                        <option value="sh">Shell (.sh)</option>
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label text-muted small fw-medium">脚本名称</label>
+                    <input type="text" id="new_script_name" class="form-control" placeholder="请输入脚本名称，不要带后缀" required>
+                </div>
+                <div class="text-muted mt-2" style="font-size: 12px;">默认保存到 scripts 根目录</div>
+            </div>
+            <div class="modal-footer bg-light">
+                <button type="button" class="btn btn-light border" data-bs-dismiss="modal">取消</button>
+                <button type="submit" class="btn btn-primary" style="width: 100px;">确定创建</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script id="raw-script-content" type="application/json">
     {{ content | tojson | safe }}
 </script>
@@ -91,6 +168,17 @@ html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1);
 {% block scripts %}
 <script src="{{ url_for('static', filename='vendor/monaco-editor/min/vs/loader.js') }}"></script>
 <script>
+    let createScriptModal = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        createScriptModal = new bootstrap.Modal(document.getElementById('createScriptModal'));
+
+        document.getElementById('createScriptForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            createNewScript();
+        });
+    });
+
     function toggleTree(element) {
         const icon = element.querySelector('i.bi');
         const childUl = element.nextElementSibling;
@@ -115,7 +203,6 @@ html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1);
     else if(filename.endsWith('.sh')) lang = 'shell';
     else if(filename.endsWith('.json')) lang = 'json';
 
-    // 核心修复：加入 try-catch 保护机制，防止个别脚本存在转义异常导致 JS 崩溃白屏
     let safeContent = "";
     try {
         const rawEl = document.getElementById('raw-script-content');
@@ -159,7 +246,7 @@ html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1);
         fetch('/api/scripts/check', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: new URLSearchParams({ filename: filename, content: editor.getValue() })
+            body: new URLSearchParams({ filename: "{{ current_file }}", content: editor.getValue() })
         }).then(res => res.json()).then(data => {
             btn.innerHTML = originalText;
             btn.disabled = false;
@@ -186,6 +273,69 @@ html.dark-theme .tree-file a.active { background-color: rgba(56, 189, 248, 0.1);
             btn.disabled = false;
             window.alert('请求失败，请检查网络');
         });
+    }
+
+    function uploadScriptFile(input) {
+        if (!input.files || !input.files[0]) return;
+        const file = input.files[0];
+        const name = file.name || '';
+        const lowerName = name.toLowerCase();
+
+        if (!(lowerName.endsWith('.js') || lowerName.endsWith('.py') || lowerName.endsWith('.sh'))) {
+            window.alert('仅支持上传 js、py、sh 文件');
+            input.value = '';
+            return;
+        }
+
+        const fd = new FormData();
+        fd.append('file', file);
+
+        fetch('/api/scripts/upload', {
+            method: 'POST',
+            body: fd
+        }).then(res => res.json()).then(data => {
+            if (data.status === 'success') {
+                window.alert(data.msg || '上传成功');
+                window.location.href = '/scripts?file=' + encodeURIComponent(data.filename);
+            } else {
+                window.alert(data.msg || '上传失败');
+            }
+        }).catch(() => {
+            window.alert('上传请求失败');
+        }).finally(() => {
+            input.value = '';
+        });
+    }
+
+    function openCreateScriptModal() {
+        document.getElementById('new_script_type').value = 'py';
+        document.getElementById('new_script_name').value = '';
+        createScriptModal.show();
+        setTimeout(() => {
+            document.getElementById('new_script_name').focus();
+        }, 200);
+    }
+
+    function createNewScript() {
+        let type = document.getElementById('new_script_type').value;
+        let name = document.getElementById('new_script_name').value.trim();
+
+        if (!['js', 'py', 'sh'].includes(type)) {
+            window.alert('脚本类型仅支持 js、py、sh');
+            return;
+        }
+        if (!name) {
+            window.alert('脚本名称不能为空');
+            return;
+        }
+        if (!/^[A-Za-z0-9_\-\u4e00-\u9fa5]+$/.test(name)) {
+            window.alert('脚本名称仅支持中文、字母、数字、下划线、中划线');
+            return;
+        }
+
+        const filename = `${name}.${type}`;
+        createScriptModal.hide();
+        window.location.href = '/scripts?file=' + encodeURIComponent(filename);
     }
 </script>
 {% endblock %}

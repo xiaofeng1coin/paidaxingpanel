@@ -12,6 +12,30 @@ body { padding-bottom: 0; padding-top: 0; }
 .editor-wrapper { margin-top: 60px; height: calc(100vh - 60px); width: 100%; position: relative; }
 #monaco-editor { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
 
-.fab-save { position: fixed; bottom: 30px; right: 20px; background: var(--text-main); color: white; border-radius: 28px; padding: 0 20px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.2); border: none; z-index: 10000; transition: 0.2s; }
+.fab-actions { position: fixed; right: 20px; bottom: 30px; display: flex; align-items: center; gap: 10px; z-index: 10000; }
+
+.fab-mini { height: 48px; border: none; border-radius: 24px; padding: 0 18px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.16); transition: 0.2s; }
+.fab-mini:active { transform: scale(0.95); }
+.fab-mini i { margin-right: 6px; }
+
+.fab-upload { background: var(--surface); color: var(--text-main); border: 1px solid var(--border); }
+
+.fab-save { background: var(--accent); color: #fff; border-radius: 24px; padding: 0 20px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.2); border: none; transition: 0.2s; }
 .fab-save:active { transform: scale(0.95); }
 .fab-save i { margin-right: 6px; }
+
+html.dark-theme .btn-back:active { background: #1e293b; }
+html.dark-theme .file-select {
+    background: #0f172a;
+    color: var(--text-main);
+    border-color: var(--border);
+}
+html.dark-theme .fab-upload {
+    background: #1e293b;
+    color: var(--text-main);
+    border-color: var(--border);
+}
+html.dark-theme .fab-save {
+    background: var(--accent);
+    color: #fff;
+}

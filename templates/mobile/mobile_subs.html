@@ -1,54 +1,47 @@
 <!-- mobile_subs.html -->
 {% extends 'mobile/mobile_base.html' %}
-{% block title %}订阅源{% endblock %}
+{% block title %}订阅管理{% endblock %}
 
 {% block styles %}
 <link href="{{ url_for('static', filename='css/mobile/mobile_subs.css') }}" rel="stylesheet">
 {% endblock %}
 
 {% block content %}
-<div class="accordion-list mt-2">
+<div class="accordion-list">
     {% for sub in pagination.items %}
-    <div class="list-item">
-        <div class="item-row" data-bs-toggle="collapse" data-bs-target="#panel-{{ sub.id }}">
-            <div class="item-info">
-                <div class="status-ring {% if sub.is_disabled == 1 %}disabled{% elif sub.status == 'Running' %}running{% elif sub.status == 'Error' %}error{% else %}idle{% endif %}" id="ring-{{ sub.id }}"></div>
+    <div class="list-item" id="sub-item-{{ sub.id }}">
+        <div class="item-row" onclick="document.getElementById('sub-item-{{ sub.id }}').classList.toggle('expanded')">
+            <div class="item-main">
                 <div class="item-name">{{ sub.name }}</div>
+                <div class="item-preview">{{ sub.url }}</div>
             </div>
-            
-            <div id="quick-action-{{ sub.id }}">
-                {% if sub.status != 'Running' %}
-                <button class="btn-quick-run" onclick="event.stopPropagation(); runSub({{ sub.id }})"><i class="bi bi-cloud-download"></i></button>
+            <div class="item-status">
+                {% if sub.status == 'Success' %}
+                <span class="status-badge success">正常</span>
+                {% elif sub.status == 'Running' %}
+                <span class="status-badge running">同步中</span>
                 {% else %}
-                <button class="btn-quick-run" disabled><i class="bi bi-hourglass-split"></i></button>
+                <span class="status-badge error">异常</span>
                 {% endif %}
             </div>
         </div>
 
-        <div class="collapse detail-panel" id="panel-{{ sub.id }}">
-            <div class="detail-text"><i class="bi bi-link-45deg me-1"></i>{{ sub.url }}</div>
-            <div class="detail-text"><i class="bi bi-stopwatch me-1"></i>{{ sub.cron if sub.cron else '无定时' }}</div>
-            
-            <div class="action-group">
-                <button class="btn-action" onclick="toggleTerminal({{ sub.id }})"><i class="bi bi-code-square me-1"></i>日志</button>
-                <a class="btn-action" href="/api/subs/toggle/{{ sub.id }}">{% if sub.is_disabled == 1 %}<i class="bi bi-unlock me-1"></i>解冻{% else %}<i class="bi bi-lock me-1"></i>冻结{% endif %}</a>
-                <button class="btn-action text-danger" onclick="if(confirm('删除此订阅源？')) window.location.href='/api/subs/delete/{{ sub.id }}'"><i class="bi bi-trash3"></i></button>
-                <button class="btn-action" style="color: #f59e0b; border-color: #fcd34d; background: #fffbeb;" onclick="if(confirm('清理该订阅产生的所有任务和文件？')) window.location.href='/api/subs/delete_tasks/{{ sub.id }}'"><i class="bi bi-stars me-1"></i>清理产物</button>
-            </div>
+        <div class="detail-panel">
+            <div class="detail-line"><span class="label">类型</span><span>{{ sub.type or '-' }}</span></div>
+            <div class="detail-line"><span class="label">分支</span><span>{{ sub.branch or '-' }}</span></div>
+            <div class="detail-line"><span class="label">规则</span><span class="font-monospace">{{ sub.schedule or '-' }}</span></div>
 
-            <div class="inline-terminal" id="term-{{ sub.id }}">
-                <div class="terminal-header">
-                    <span>GIT PULL LOGS</span>
-                    <i class="bi bi-x-circle" style="cursor: pointer;" onclick="toggleTerminal({{ sub.id }})"></i>
-                </div>
-                <pre class="terminal-body" id="term-body-{{ sub.id }}"></pre>
+            <div class="action-group">
+                <button class="btn-action" onclick="syncSub({{ sub.id }})"><i class="bi bi-arrow-repeat me-1"></i>同步</button>
+                <button class="btn-action secondary" onclick='openEditSubModal({{ sub.id }}, {{ sub.name | tojson }}, {{ sub.url | tojson }}, {{ (sub.type or "") | tojson }}, {{ (sub.branch or "") | tojson }}, {{ (sub.schedule or "") | tojson }})'><i class="bi bi-pencil-square me-1"></i>编辑</button>
+                <button class="btn-action danger" onclick="if(confirm('删除该订阅？')) window.location.href='/subs/delete/{{ sub.id }}?page={{ pagination.page }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
             </div>
         </div>
     </div>
     {% else %}
     <div class="text-center py-5 text-muted">
-        <i class="bi bi-cloud-slash fs-1 mb-2 d-block opacity-50"></i>
-        <p class="font-monospace text-sm">暂无订阅源</p>
+        <i class="bi bi-inboxes fs-1 mb-2 d-block opacity-50"></i>
+        <p class="font-monospace text-sm">暂无订阅记录</p>
     </div>
     {% endfor %}
 </div>
@@ -63,29 +56,51 @@
 </div>
 {% endif %}
 
-<button class="fab" data-bs-toggle="modal" data-bs-target="#subModal"><i class="bi bi-plus-lg"></i></button>
+<button class="fab" data-bs-toggle="modal" data-bs-target="#addSubModal"><i class="bi bi-plus-lg"></i></button>
 
-<div class="modal fade" id="subModal" tabindex="-1">
+<div class="modal fade" id="addSubModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered mx-3">
-        <form class="modal-content border-0 rounded-4" id="subForm">
+        <form class="modal-content border-0 rounded-4" method="POST" action="/subs/add">
             <div class="modal-header border-0 pb-0">
-                <h6 class="modal-title fw-bold">新增订阅源</h6>
+                <h6 class="modal-title fw-bold">新增订阅</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <input type="text" name="name" class="form-control bg-light border-0 p-3 mb-3 rounded-3" placeholder="订阅名称" required>
-                <div class="mb-3 d-flex gap-2">
-                    <select name="type" class="form-select bg-light border-0 p-3 rounded-3 font-monospace" style="flex: 1;">
-                        <option value="public_repo">Git 仓库</option>
-                        <option value="single_file">Raw 单文件</option>
-                    </select>
-                </div>
-                <input type="text" name="url" id="inp_url" class="form-control bg-light border-0 p-3 mb-3 rounded-3" placeholder="仓库地址或 Raw 链接" required>
-                <input type="text" name="cron" class="form-control bg-light border-0 p-3 mb-2 rounded-3 font-monospace" placeholder="定时拉取规则 (如 0 0 * * *)">
-                <input type="hidden" name="alias" id="inp_alias">
+                <input type="text" name="name" class="form-control mobile-modal-input p-3 mb-3 rounded-3" placeholder="订阅名称" required>
+                <input type="text" name="url" class="form-control mobile-modal-input p-3 mb-3 rounded-3 font-monospace" placeholder="订阅链接" required>
+                <select name="type" class="form-select mobile-modal-input p-3 mb-3 rounded-3">
+                    <option value="repo">仓库订阅</option>
+                    <option value="single">单脚本订阅</option>
+                </select>
+                <input type="text" name="branch" class="form-control mobile-modal-input p-3 mb-3 rounded-3 font-monospace" placeholder="分支（可选）">
+                <input type="text" name="schedule" class="form-control mobile-modal-input p-3 mb-2 rounded-3 font-monospace" placeholder="定时规则，如 0 */6 * * *">
             </div>
             <div class="modal-footer border-0 pt-0">
-                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">拉 取 并 保 存</button>
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保存配置</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="editSubModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered mx-3">
+        <form class="modal-content border-0 rounded-4" id="editSubForm" method="POST">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold">编辑订阅</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="text" name="name" id="edit_sub_name" class="form-control mobile-modal-input p-3 mb-3 rounded-3" placeholder="订阅名称" required>
+                <input type="text" name="url" id="edit_sub_url" class="form-control mobile-modal-input p-3 mb-3 rounded-3 font-monospace" placeholder="订阅链接" required>
+                <select name="type" id="edit_sub_type" class="form-select mobile-modal-input p-3 mb-3 rounded-3">
+                    <option value="repo">仓库订阅</option>
+                    <option value="single">单脚本订阅</option>
+                </select>
+                <input type="text" name="branch" id="edit_sub_branch" class="form-control mobile-modal-input p-3 mb-3 rounded-3 font-monospace" placeholder="分支（可选）">
+                <input type="text" name="schedule" id="edit_sub_schedule" class="form-control mobile-modal-input p-3 mb-2 rounded-3 font-monospace" placeholder="定时规则，如 0 */6 * * *">
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保存配置</button>
             </div>
         </form>
     </div>
@@ -94,71 +109,33 @@
 
 {% block scripts %}
 <script>
-    const socket = io();
-    let activeTerminalId = null;
+    let editSubModal = null;
 
-    function toggleTerminal(id) {
-        const termBox = document.getElementById(`term-${id}`);
-        const termBody = document.getElementById(`term-body-${id}`);
-        if (termBox.style.display === 'block') {
-            termBox.style.display = 'none';
-            if(activeTerminalId === id) activeTerminalId = null;
-        } else {
-            termBox.style.display = 'block';
-            activeTerminalId = id;
-            termBody.innerText = 'Connecting...\n';
-            fetch(`/api/subs/log/${id}`).then(r=>r.json()).then(d=>{ 
-                if(activeTerminalId === id) {
-                    termBody.innerText = d.content.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
-                    termBody.scrollTop = termBody.scrollHeight; 
-                }
-            });
-        }
+    document.addEventListener('DOMContentLoaded', function() {
+        editSubModal = new bootstrap.Modal(document.getElementById('editSubModal'));
+    });
+
+    function openEditSubModal(id, name, url, type, branch, schedule) {
+        document.getElementById('editSubForm').action = `/subs/edit/${id}`;
+        document.getElementById('edit_sub_name').value = name || '';
+        document.getElementById('edit_sub_url').value = url || '';
+        document.getElementById('edit_sub_type').value = type || 'repo';
+        document.getElementById('edit_sub_branch').value = branch || '';
+        document.getElementById('edit_sub_schedule').value = schedule || '';
+        editSubModal.show();
     }
 
-    function runSub(id) {
-        const termBox = document.getElementById(`term-${id}`);
-        if(termBox.style.display !== 'block') { toggleTerminal(id); }
-        document.getElementById(`term-body-${id}`).innerText = '> Pulling updates...\n';
-        fetch(`/api/subs/run/${id}`).then(r=>r.json());
+    function syncSub(id) {
+        fetch(`/api/subs/sync/${id}`, {
+            method: 'POST'
+        }).then(res => res.json()).then(data => {
+            alert(data.msg || (data.status === 'success' ? '同步任务已提交' : '同步失败'));
+            if (data.status === 'success') {
+                setTimeout(() => location.reload(), 1200);
+            }
+        }).catch(() => {
+            alert('同步请求失败');
+        });
     }
-
-    document.getElementById('subForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const url = document.getElementById('inp_url').value.trim();
-        let repoName = url.split('/').pop() || 'sub_' + Date.now();
-        if (repoName.endsWith('.git')) repoName = repoName.slice(0, -4);
-        document.getElementById('inp_alias').value = repoName;
-
-        const data = Object.fromEntries(new FormData(this).entries());
-        data.auto_add = 1; data.auto_del = 1;
-
-        fetch('/api/subs/add', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) })
-        .then(r => r.json()).then(d => { if(d.status === 'success') location.reload(); else alert("保存失败"); });
-    });
-
-    socket.on('log_stream', function(msg) {
-        if(msg.task_id === `sub_${activeTerminalId}`) {
-            const body = document.getElementById(`term-body-${activeTerminalId}`);
-            if(!body) return;
-            if(msg.clear) body.innerText = '';
-            body.innerText += msg.data.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
-            body.scrollTop = body.scrollHeight;
-        }
-    });
-
-    socket.on('sub_status', function(msg) {
-        const id = msg.sub_id;
-        const ring = document.getElementById(`ring-${id}`);
-        const quickWrap = document.getElementById(`quick-action-${id}`);
-        if(!ring || !quickWrap) return;
-        
-        if(msg.status === 'Running') {
-            ring.className = 'status-ring running';
-            quickWrap.innerHTML = `<button class="btn-quick-run" disabled><i class="bi bi-hourglass-split"></i></button>`;
-        } else {
-            setTimeout(()=> location.reload(), 1000); 
-        }
-    });
 </script>
 {% endblock %}

@@ -1,3 +1,12 @@
 .editor-wrapper { background: #FFFFFF; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
 .code-textarea { background: transparent !important; color: #334155 !important; font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important; font-size: 14px; line-height: 1.6; border: none !important; resize: none; padding: 16px; }
 .code-textarea:focus { box-shadow: none !important; outline: none !important; }
+html.dark-theme .editor-wrapper {
+    background: #1E293B !important;
+    border-color: #334155 !important;
+}
+
+html.dark-theme .code-textarea {
+    background: #0F172A !important;
+    color: #E2E8F0 !important;
+}
