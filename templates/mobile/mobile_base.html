@@ -5,6 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>派大星面板</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='images/default_star.svg') }}">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='images/default_star.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='images/default_star.svg') }}">
     <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/mobile/mobile_base.css') }}" rel="stylesheet">
@@ -30,7 +33,10 @@
     {% if current_user.is_authenticated and request.endpoint not in ['login'] %}
     <header class="app-header">
         <div class="app-logo">
-            <i class="bi bi-cpu text-primary"></i> 派大星面板
+            <span style="width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; overflow: hidden;">
+                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="logo" style="width:100%; height:100%; object-fit: contain;" onerror="this.onerror=null; this.src='{{ url_for('static', filename='images/default_star.svg') }}';">
+            </span>
+            派大星面板
             <span style="font-size: 12px; font-weight: 500; color: var(--text-sub); margin-left: 6px; font-family: monospace; margin-top: 2px;">v{{ sys_version }}</span>
         </div>
         <div class="header-actions">
@@ -63,7 +69,6 @@
         {% block content %}{% endblock %}
     </div>
 
-    <!-- 底部确认抽屉 -->
     <div class="offcanvas offcanvas-bottom rounded-top-4" tabindex="-1" id="sysConfirmSheet" style="height: auto;">
         <div class="offcanvas-body p-4 text-center">
             <h6 class="mb-4 fw-bold text-dark" id="sysConfirmMessage" style="font-size: 16px; line-height: 1.5;"></h6>

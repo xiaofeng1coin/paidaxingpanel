@@ -29,11 +29,13 @@
         <div class="detail-panel">
             <div class="detail-line"><span class="label">类型</span><span>{{ sub.type or '-' }}</span></div>
             <div class="detail-line"><span class="label">分支</span><span>{{ sub.branch or '-' }}</span></div>
-            <div class="detail-line"><span class="label">规则</span><span class="font-monospace">{{ sub.schedule or '-' }}</span></div>
+            <div class="detail-line"><span class="label">规则</span><span class="font-monospace">{{ sub.cron or '-' }}</span></div>
+            <div class="detail-line"><span class="label">保护目录</span><span class="font-monospace">data/deps/{{ sub.alias }}/</span></div>
 
             <div class="action-group">
                 <button class="btn-action" onclick="syncSub({{ sub.id }})"><i class="bi bi-arrow-repeat me-1"></i>同步</button>
-                <button class="btn-action secondary" onclick='openEditSubModal({{ sub.id }}, {{ sub.name | tojson }}, {{ sub.url | tojson }}, {{ (sub.type or "") | tojson }}, {{ (sub.branch or "") | tojson }}, {{ (sub.schedule or "") | tojson }})'><i class="bi bi-pencil-square me-1"></i>编辑</button>
+                <button class="btn-action secondary" onclick='openEditSubModal({{ sub.id }}, {{ sub.name | tojson }}, {{ sub.url | tojson }}, {{ (sub.type or "") | tojson }}, {{ (sub.branch or "") | tojson }}, {{ (sub.cron or "") | tojson }})'><i class="bi bi-pencil-square me-1"></i>编辑</button>
+                <button class="btn-action secondary" onclick='showOverridePath({{ sub.name | tojson }}, {{ sub.alias | tojson }})'><i class="bi bi-folder2-open me-1"></i>目录</button>
                 <button class="btn-action danger" onclick="if(confirm('删除该订阅？')) window.location.href='/subs/delete/{{ sub.id }}?page={{ pagination.page }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
             </div>
         </div>
@@ -74,6 +76,7 @@
                 </select>
                 <input type="text" name="branch" class="form-control mobile-modal-input p-3 mb-3 rounded-3 font-monospace" placeholder="分支（可选）">
                 <input type="text" name="schedule" class="form-control mobile-modal-input p-3 mb-2 rounded-3 font-monospace" placeholder="定时规则，如 0 */6 * * *">
+                <div class="text-muted small mt-2">创建后可将不想被覆盖的文件放入：data/deps/唯一值/</div>
             </div>
             <div class="modal-footer border-0 pt-0">
                 <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保存配置</button>
@@ -119,7 +122,7 @@
         document.getElementById('editSubForm').action = `/subs/edit/${id}`;
         document.getElementById('edit_sub_name').value = name || '';
         document.getElementById('edit_sub_url').value = url || '';
-        document.getElementById('edit_sub_type').value = type || 'repo';
+        document.getElementById('edit_sub_type').value = type === 'public_repo' ? 'repo' : (type === 'single_file' ? 'single' : (type || 'repo'));
         document.getElementById('edit_sub_branch').value = branch || '';
         document.getElementById('edit_sub_schedule').value = schedule || '';
         editSubModal.show();
@@ -136,6 +139,10 @@
         }).catch(() => {
             alert('同步请求失败');
         });
+    }
+
+    function showOverridePath(name, alias) {
+        alert(`订阅 [ ${name} ] 的自定义文件目录：\n\ndata/deps/${alias}/\n\n把你不想被覆盖的文件放到这里，并保持和仓库相同的目录结构。下次同步后系统会自动覆盖回去。`);
     }
 </script>
 {% endblock %}

@@ -8,9 +8,19 @@
 
 {% block content %}
 <div class="filter-pills">
-    <a href="/?status=all&per_page={{ per_page }}" class="pill {% if status_filter == 'all' and source_filter == 'all' %}active{% endif %}">全部</a>
-    <a href="/?status=normal&per_page={{ per_page }}" class="pill {% if status_filter == 'normal' and source_filter == 'all' %}active{% endif %}">正常</a>
-    <a href="/?status=disabled&per_page={{ per_page }}" class="pill {% if status_filter == 'disabled' and source_filter == 'all' %}active{% endif %}">禁用</a>
+    <a href="/?status=all&per_page={{ per_page }}{% if keyword %}&keyword={{ keyword }}{% endif %}" class="pill {% if status_filter == 'all' and source_filter == 'all' %}active{% endif %}">全部</a>
+    <a href="/?status=normal&per_page={{ per_page }}{% if keyword %}&keyword={{ keyword }}{% endif %}" class="pill {% if status_filter == 'normal' and source_filter == 'all' %}active{% endif %}">正常</a>
+    <a href="/?status=disabled&per_page={{ per_page }}{% if keyword %}&keyword={{ keyword }}{% endif %}" class="pill {% if status_filter == 'disabled' and source_filter == 'all' %}active{% endif %}">禁用</a>
+</div>
+
+<div class="px-3 pt-1 pb-2">
+    <form class="d-flex gap-2" method="GET" action="/">
+        <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
+        <input type="hidden" name="source" value="{{ source_filter }}">
+        <input type="hidden" name="per_page" value="{{ per_page }}">
+        <input type="text" name="keyword" class="form-control" placeholder="搜索任务名称或脚本名" value="{{ keyword or '' }}">
+        <button type="submit" class="btn btn-primary px-4">搜索</button>
+    </form>
 </div>
 
 <div class="px-3 pb-2">
@@ -19,20 +29,20 @@
 
 <div class="filter-pills">
     {% for view in source_views %}
-    <a href="/?source={{ view.source_key }}&per_page={{ per_page }}" class="pill {% if source_filter == view.source_key %}active{% endif %}">{{ view.name }}</a>
+    <a href="/?source={{ view.source_key }}&per_page={{ per_page }}{% if keyword %}&keyword={{ keyword }}{% endif %}" class="pill {% if source_filter == view.source_key %}active{% endif %}">{{ view.name }}</a>
     {% endfor %}
     <button type="button" class="pill pill-action" onclick="openTaskViewSheet()">视图管理</button>
 </div>
 
-<div class="accordion-list">
+<div class="accordion-list" id="mobileTaskList">
     {% for task in pagination.items %}
-    <div class="task-item" id="item-{{ task.id }}">
+    <div class="task-item" id="item-{{ task.id }}" data-task-id="{{ task.id }}" data-original-index="{{ loop.index0 }}">
         <div class="task-row" onclick="document.getElementById('item-{{ task.id }}').classList.toggle('expanded')">
             <div class="task-info">
                 <div class="status-ring {% if task.is_disabled == 1 %}disabled{% elif task.status == 'Queued' %}running{% elif task.status == 'Running' %}running{% elif task.status == 'Error' %}error{% else %}idle{% endif %}" id="ring-{{ task.id }}"></div>
                 <div class="task-name">{{ task.name }}</div>
             </div>
-            <div id="quick-action-{{ task.id }}">
+            <div id="quick-action-{{ task.id }}" data-task-state="{% if task.is_disabled == 1 %}Disabled{% elif task.status == 'Queued' %}Queued{% elif task.status == 'Running' %}Running{% elif task.status == 'Error' %}Error{% else %}Idle{% endif %}">
                 {% if task.status == 'Running' or task.status == 'Queued' %}
                 <button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask({{ task.id }})"><i class="bi bi-stop-fill"></i></button>
                 {% else %}
@@ -62,8 +72,8 @@
             <div class="action-group">
                 <button class="btn-action" onclick="toggleTerminal({{ task.id }})"><i class="bi bi-card-text me-1"></i>日志</button>
                 <button class="btn-action" onclick='openEditTaskModal({{ task.id }}, {{ task.name | tojson }}, {{ task.command | tojson }}, {{ task.cron | tojson }})'><i class="bi bi-pencil-square me-1"></i>编辑</button>
-                <a class="btn-action" href="/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
-                <button class="btn-action text-danger" onclick="if(confirm('删除此任务？')) window.location.href='/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
+                <a class="btn-action" href="/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
+                <button class="btn-action text-danger" onclick="if(confirm('删除此任务？')) window.location.href='/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}'"><i class="bi bi-trash3 me-1"></i>删除</button>
             </div>
 
             <div class="inline-terminal" id="term-{{ task.id }}">
@@ -86,9 +96,9 @@
 {% if pagination.pages > 1 %}
 <div class="d-flex justify-content-center mt-4">
     <div class="btn-group bg-white rounded-3 shadow-sm border">
-        <a href="{{ url_for('tasks', status=status_filter if source_filter == 'all' else 'all', source=source_filter, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
+        <a href="{{ url_for('tasks', status=status_filter if source_filter == 'all' else 'all', source=source_filter, keyword=keyword, per_page=per_page, page=pagination.prev_num) if pagination.has_prev else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_prev %}disabled{% endif %}"><i class="bi bi-chevron-left"></i></a>
         <span class="btn btn-light border-0 disabled text-dark fw-bold font-monospace px-4">{{ pagination.page }} / {{ pagination.pages }}</span>
-        <a href="{{ url_for('tasks', status=status_filter if source_filter == 'all' else 'all', source=source_filter, per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
+        <a href="{{ url_for('tasks', status=status_filter if source_filter == 'all' else 'all', source=source_filter, keyword=keyword, per_page=per_page, page=pagination.next_num) if pagination.has_next else '#' }}" class="btn btn-light border-0 px-3 {% if not pagination.has_next %}disabled{% endif %}"><i class="bi bi-chevron-right"></i></a>
     </div>
 </div>
 {% endif %}
@@ -116,6 +126,7 @@
             <input type="hidden" name="per_page" value="{{ per_page }}">
             <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
             <input type="hidden" name="source" value="{{ source_filter }}">
+            <input type="hidden" name="keyword" value="{{ keyword or '' }}">
             <div class="modal-header border-0 pb-0">
                 <h6 class="modal-title fw-bold">新增任务</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -139,6 +150,7 @@
             <input type="hidden" name="per_page" value="{{ per_page }}">
             <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
             <input type="hidden" name="source" value="{{ source_filter }}">
+            <input type="hidden" name="keyword" value="{{ keyword or '' }}">
             <div class="modal-header border-0 pb-0">
                 <h6 class="modal-title fw-bold">编辑任务</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -172,6 +184,7 @@
                 location.reload();
             }
         });
+        reorderMobileTaskItems();
     });
 
     function updateQueueCount(count) {
@@ -179,6 +192,33 @@
         if (badge) {
             badge.innerText = `当前队列长度：${count}`;
         }
+    }
+
+    function isBusyTaskState(state) {
+        return state === 'Queued' || state === 'Running';
+    }
+
+    function reorderMobileTaskItems() {
+        const list = document.getElementById('mobileTaskList');
+        if (!list) return;
+        const items = Array.from(list.querySelectorAll('.task-item[data-task-id]'));
+        items.sort((a, b) => {
+            const aState = document.getElementById(`quick-action-${a.dataset.taskId}`)?.dataset.taskState || 'Idle';
+            const bState = document.getElementById(`quick-action-${b.dataset.taskId}`)?.dataset.taskState || 'Idle';
+            const aBusy = isBusyTaskState(aState) ? 0 : 1;
+            const bBusy = isBusyTaskState(bState) ? 0 : 1;
+            if (aBusy !== bBusy) return aBusy - bBusy;
+            return parseInt(a.dataset.originalIndex || '0') - parseInt(b.dataset.originalIndex || '0');
+        });
+        items.forEach(item => list.appendChild(item));
+    }
+
+    function setMobileTaskState(id, state) {
+        const quickWrap = document.getElementById(`quick-action-${id}`);
+        if (quickWrap) {
+            quickWrap.dataset.taskState = state;
+        }
+        reorderMobileTaskItems();
     }
 
     function openEditTaskModal(id, name, command, cron) {
@@ -271,6 +311,7 @@
                 if (statusText) {
                     statusText.innerHTML = `<i class="bi bi-activity me-1"></i>排队中`;
                 }
+                setMobileTaskState(id, 'Queued');
             } else {
                 alert(data.msg || '启动失败');
             }
@@ -295,6 +336,7 @@
                     if (statusText) {
                         statusText.innerHTML = `<i class="bi bi-activity me-1"></i>空闲`;
                     }
+                    setMobileTaskState(id, 'Idle');
                 } else {
                     alert(data.msg || '停止失败');
                 }
@@ -342,14 +384,17 @@
             ring.className = 'status-ring running';
             quickWrap.innerHTML = `<button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask(${id})"><i class="bi bi-stop-fill"></i></button>`;
             if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>排队中`;
+            setMobileTaskState(id, 'Queued');
         } else if(msg.status === 'Running') {
             ring.className = 'status-ring running';
             quickWrap.innerHTML = `<button class="btn-quick-run stop" onclick="event.stopPropagation(); stopTask(${id})"><i class="bi bi-stop-fill"></i></button>`;
             if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>运行中`;
+            setMobileTaskState(id, 'Running');
         } else {
             ring.className = msg.status === 'Idle' ? 'status-ring idle' : 'status-ring error';
             quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
             if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>${msg.status === 'Idle' ? '空闲' : '出错'}`;
+            setMobileTaskState(id, msg.status === 'Idle' ? 'Idle' : 'Error');
         }
     });
 </script>

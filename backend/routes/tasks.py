@@ -1,3 +1,4 @@
+import os
 import threading
 from datetime import datetime
 from flask import request, redirect, url_for, jsonify
@@ -14,7 +15,8 @@ def build_tasks_redirect():
     per_page = request.values.get('per_page', 10, type=int)
     status = request.values.get('status', 'all')
     source = request.values.get('source', 'all')
-    return redirect(url_for('tasks', page=page, per_page=per_page, status=status, source=source))
+    keyword = request.values.get('keyword', '').strip()
+    return redirect(url_for('tasks', page=page, per_page=per_page, status=status, source=source, keyword=keyword))
 
 def init_app(app, add_job_to_scheduler):
     @app.route('/')
@@ -24,6 +26,7 @@ def init_app(app, add_job_to_scheduler):
         per_page = request.args.get('per_page', 10, type=int)
         status_filter = request.args.get('status', 'all')
         source_filter = request.args.get('source', 'all')
+        keyword = request.args.get('keyword', '').strip()
 
         query = Task.query
 
@@ -39,6 +42,13 @@ def init_app(app, add_job_to_scheduler):
             elif status_filter == 'disabled':
                 query = query.filter(Task.is_disabled == 1)
             source_filter = 'all'
+
+        if keyword:
+            keyword_like = f"%{keyword}%"
+            query = query.filter(
+                (Task.name.like(keyword_like)) |
+                (Task.command.like(keyword_like))
+            )
 
         pagination = query.order_by(Task.is_disabled.asc(), Task.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
 
@@ -62,7 +72,7 @@ def init_app(app, add_job_to_scheduler):
                 except Exception:
                     task.next_run = "规则错误"
 
-        return render_template('tasks.html', pagination=pagination, status_filter=status_filter, source_filter=source_filter, per_page=per_page, source_views=source_views, all_views=all_views, queued_count=len(task_queue))
+        return render_template('tasks.html', pagination=pagination, status_filter=status_filter, source_filter=source_filter, per_page=per_page, source_views=source_views, all_views=all_views, queued_count=len(task_queue), keyword=keyword)
 
     @app.route('/api/task_views')
     @login_required

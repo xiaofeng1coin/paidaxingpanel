@@ -69,6 +69,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                                     <ul class="dropdown-menu dropdown-menu-end dropdown-menu-action border-0">
                                         <li><a class="dropdown-item" href="javascript:void(0);" onclick='openEditModal({{ sub.id }}, {{ sub.name | tojson }}, {{ sub.type | tojson }}, {{ sub.url | tojson }}, {{ sub.branch | tojson }}, {{ sub.alias | tojson }}, {{ sub.cron | tojson }}, {{ sub.whitelist | tojson }}, {{ sub.blacklist | tojson }}, {{ sub.depend_file | tojson }}, {{ sub.extensions | tojson }}, {{ sub.auto_add }}, {{ sub.auto_del }})'><i class="bi bi-pencil-square"></i> 编辑</a></li>
                                         <li><a class="dropdown-item" href="/api/subs/toggle/{{ sub.id }}"><i class="bi bi-slash-circle"></i> {% if sub.is_disabled == 1 %}启用{% else %}禁用{% endif %}</a></li>
+                                        <li><a class="dropdown-item" href="javascript:void(0);" onclick='showOverridePath({{ sub.name | tojson }}, {{ sub.alias | tojson }})'><i class="bi bi-folder2-open"></i> 自定义文件目录</a></li>
                                         <li><a class="dropdown-item text-warning" href="/api/subs/delete_tasks/{{ sub.id }}" onclick="return confirm('确定要删除该订阅产生的所有任务并删除对应的物理文件/目录吗？')"><i class="bi bi-trash2"></i> 删除任务</a></li>
                                         <li><hr class="dropdown-divider m-0 my-1"></li>
                                         <li><a class="dropdown-item text-danger" href="/api/subs/delete/{{ sub.id }}" onclick="return confirm('确定要删除该订阅吗？(已添加的任务不会被自动删除)')"><i class="bi bi-trash"></i> 删除订阅</a></li>
@@ -143,6 +144,15 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                 <div class="mb-3">
                     <label class="form-label text-muted small fw-medium"><span class="text-danger">*</span> 唯一值 (自动生成目录名) <i class="bi bi-question-circle" title="脚本保存的目录名称，系统自动生成"></i></label>
                     <input type="text" name="alias" id="inp_alias" class="form-control bg-light" readonly>
+                </div>
+
+                <div class="mb-2">
+                    <div class="small text-muted">
+                        自定义保护文件目录：<span class="font-monospace">data/deps/唯一值/</span><br>
+                        例如订阅唯一值是 <span class="font-monospace">abc_main</span>，则把你不想被覆盖的文件放到：<br>
+                        <span class="font-monospace">data/deps/abc_main/</span><br>
+                        目录结构保持和仓库内相同，下一次同步后系统会自动覆盖回去。
+                    </div>
                 </div>
 
                 <div class="mb-3">
@@ -239,7 +249,6 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         const branch = branchInput.value.trim();
         if (!url) { aliasInput.value = ''; return; }
         
-        // 提取最后一个 / 后的内容作为仓库名/文件名
         let repoName = url.split('/').pop();
         if (repoName.endsWith('.git')) repoName = repoName.slice(0, -4);
         
@@ -290,9 +299,13 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
         document.getElementById('autoDel').checked = auto_del === 1;
         
         toggleSubFields();
-        // 恢复覆盖 alias
         document.getElementById('inp_alias').value = alias;
         mainModal.show();
+    }
+
+    function showOverridePath(name, alias) {
+        const path = `data/deps/${alias}/`;
+        window.alert(`订阅 [ ${name} ] 的自定义文件目录：\n\n${path}\n\n使用方法：\n1、把你不想被覆盖的文件放到该目录\n2、目录结构保持和仓库内一致\n3、下次同步订阅后，系统会自动把这里的文件覆盖回去`);
     }
 
     document.getElementById('subForm').addEventListener('submit', function(e) {

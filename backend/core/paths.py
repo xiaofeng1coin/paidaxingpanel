@@ -19,6 +19,7 @@ else:
 SCRIPTS_DIR = os.path.join(DATA_DIR, 'scripts')
 LOGS_DIR = os.path.join(DATA_DIR, 'logs')
 CONFIG_DIR = os.path.join(DATA_DIR, 'config')
+CUSTOM_OVERRIDE_DIR = os.path.join(DATA_DIR, 'deps')
 
 if os.environ.get('TERMUX_DATA_DIR'):
     PRIVATE_DATA_DIR = os.environ.get('TERMUX_PRIVATE_DIR', os.path.join(BASE_DIR, 'data_private'))
@@ -42,6 +43,7 @@ os.makedirs(CONFIG_DIR, exist_ok=True)
 os.makedirs(NODE_DIR, exist_ok=True)
 os.makedirs(PYTHON_DIR, exist_ok=True)
 os.makedirs(LINUX_DIR, exist_ok=True)
+os.makedirs(CUSTOM_OVERRIDE_DIR, exist_ok=True)
 
 node_pkg_json = os.path.join(NODE_DIR, 'package.json')
 if not os.path.exists(node_pkg_json):

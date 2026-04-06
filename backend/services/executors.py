@@ -12,7 +12,7 @@ from datetime import datetime
 from backend.models import db, Task, Env, Dependency, SystemConfig, Subscription, TaskView
 from backend.extensions import socketio, scheduler
 from backend.runtime import running_processes, debug_processes, SUBPROCESS_KWARGS, queued_tasks, task_queue
-from backend.core.paths import SCRIPTS_DIR, LOGS_DIR, NODE_DIR, PYTHON_DIR, LINUX_DIR
+from backend.core.paths import SCRIPTS_DIR, LOGS_DIR, NODE_DIR, PYTHON_DIR, LINUX_DIR, CUSTOM_OVERRIDE_DIR
 from backend.core.security import get_safe_path
 from backend.core.env_manager import get_combined_env
 from backend.core.dependency_manager import run_dependency_install_sync, normalize_python_package_name
@@ -112,6 +112,67 @@ def task_queue_worker(app):
             pass
 
         time.sleep(1)
+
+
+def get_subscription_override_dir(sub):
+    if not sub or not sub.alias:
+        return None
+    override_dir = get_safe_path(CUSTOM_OVERRIDE_DIR, sub.alias)
+    if not override_dir:
+        return None
+    return override_dir
+
+
+def list_override_files(base_dir):
+    rel_files = []
+    if not base_dir or not os.path.exists(base_dir):
+        return rel_files
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d not in ['.git', '__pycache__']]
+        for file_name in files:
+            src_file = os.path.join(root, file_name)
+            rel_path = os.path.relpath(src_file, base_dir).replace('\\', '/')
+            rel_files.append(rel_path)
+    rel_files.sort()
+    return rel_files
+
+
+def apply_custom_overrides_for_subscription(sub, target_dir, write_log=None):
+    override_dir = get_subscription_override_dir(sub)
+    if not override_dir or not os.path.exists(override_dir):
+        if write_log:
+            write_log("ℹ️ 未检测到该订阅的自定义覆盖目录，跳过覆盖保护步骤\n")
+        return []
+
+    override_files = list_override_files(override_dir)
+    if not override_files:
+        if write_log:
+            write_log("ℹ️ 自定义覆盖目录存在，但未发现可覆盖文件，跳过覆盖保护步骤\n")
+        return []
+
+    applied_files = []
+    if write_log:
+        write_log(f"🛡️ 检测到自定义覆盖目录：{override_dir}\n")
+        write_log(f"🛡️ 共发现 {len(override_files)} 个自定义文件，开始回填覆盖...\n")
+
+    for rel_path in override_files:
+        src_file = get_safe_path(override_dir, rel_path)
+        dst_file = get_safe_path(target_dir, rel_path)
+        if not src_file or not dst_file:
+            if write_log:
+                write_log(f"⚠️ 跳过非法覆盖路径：{rel_path}\n")
+            continue
+        if not os.path.exists(src_file):
+            continue
+        os.makedirs(os.path.dirname(dst_file), exist_ok=True)
+        shutil.copy2(src_file, dst_file)
+        applied_files.append(rel_path)
+        if write_log:
+            write_log(f"✅ 已回填自定义文件：{rel_path}\n")
+
+    if write_log:
+        write_log(f"🛡️ 自定义覆盖回填完成，共处理 {len(applied_files)} 个文件\n\n")
+    return applied_files
 
 
 def diagnose_task_issue(app, output_text, returncode, duration_seconds):
@@ -516,6 +577,8 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
 
                     if process.returncode != 0:
                         raise Exception(f"Git 操作失败，退出码: {process.returncode}")
+
+                    apply_custom_overrides_for_subscription(sub, target_dir, write_log)
 
                     files_to_process = []
                     for root, dirs, files in os.walk(target_dir):
