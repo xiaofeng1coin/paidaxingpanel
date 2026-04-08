@@ -88,7 +88,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                 </thead>
                 <tbody id="taskTableBody">
                     {% for task in pagination.items %}
-                    <tr id="row-{{ task.id }}" data-task-id="{{ task.id }}" data-original-index="{{ loop.index0 }}">
+                    <tr id="row-{{ task.id }}" data-task-id="{{ task.id }}" data-original-index="{{ loop.index0 }}" data-is-disabled="{{ task.is_disabled }}" data-task-name="{{ task.name }}">
                         <td style="padding-left: 20px;">
                             <input type="checkbox" class="form-check-input task-checkbox" value="{{ task.id }}">
                         </td>
@@ -120,7 +120,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                                     {% elif task.status == 'Queued' %}
                                         <button class="action-link text-danger" onclick="stopTask({{ task.id }})">取消</button>
                                     {% else %}
-                                        <button class="action-link" onclick='runTask({{ task.id }}, {{ task.name | tojson }})'>运行</button>
+                                        <button class="action-link" onclick="runTask({{ task.id }})">运行</button>
                                     {% endif %}
                                 </span>
                                 <button class="action-link ms-1" onclick='openLogModal({{ task.id }}, {{ task.name | tojson }})'>日志</button>
@@ -339,7 +339,9 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         }).catch(()=> logContainer.textContent = "请求超时");
     }
 
-    function runTask(taskId, taskName) {
+    function runTask(taskId) {
+        const row = document.getElementById(`row-${taskId}`);
+        const taskName = row ? row.getAttribute('data-task-name') : '任务';
         openLogModal(taskId, taskName);
         document.getElementById('modal-log-container').innerHTML = `## 开始执行... 准备下发指令\n\n`;
         fetch(`/api/task/run/${taskId}`).then(res => res.json()).then(data => {
@@ -350,6 +352,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                 const lastRunCol = document.getElementById(`lastrun-col-${taskId}`);
                 if (statusCol) {
                     statusCol.innerHTML = `<span class="badge-soft" style="background:#EDE9FE;color:#7C3AED;">排队中</span>`;
+                    statusCol.dataset.taskState = 'Queued';
                 }
                 if (runBtnWrap) {
                     runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">取消</button>`;
@@ -379,20 +382,26 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                     const runBtnWrap = document.getElementById(`run-btn-wrap-${taskId}`);
                     const durationCol = document.getElementById(`duration-col-${taskId}`);
                     const row = document.getElementById(`row-${taskId}`);
-                    let safeName = '';
-                    if (row && row.cells[2]) {
-                        safeName = row.cells[2].innerText.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                    }
+                    
+                    const isDisabled = row ? parseInt(row.getAttribute('data-is-disabled') || '0') : 0;
+                    
                     if (statusCol) {
-                        statusCol.innerHTML = `<span class="badge-soft badge-soft-secondary">空闲</span>`;
+                        if (isDisabled === 1) {
+                            statusCol.innerHTML = `<span class="badge-soft badge-soft-warning">已禁用</span>`;
+                            statusCol.dataset.taskState = 'Disabled';
+                            setTaskState(taskId, 'Disabled');
+                        } else {
+                            statusCol.innerHTML = `<span class="badge-soft badge-soft-secondary">空闲</span>`;
+                            statusCol.dataset.taskState = 'Idle';
+                            setTaskState(taskId, 'Idle');
+                        }
                     }
                     if (runBtnWrap) {
-                        runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId}, ${JSON.stringify(safeName)})">运行</button>`;
+                        runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId})">运行</button>`;
                     }
                     if (durationCol) {
                         durationCol.innerText = 'Stopped';
                     }
-                    setTaskState(taskId, 'Idle');
                 } else {
                     window.alert(data.msg || '停止失败');
                 }
@@ -501,31 +510,44 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 
     socket.on('task_status', function(msg) {
         const taskId = msg.task_id, status = msg.status;
+        const row = document.getElementById(`row-${taskId}`);
+        if (!row) return;
+
+        const isDisabled = parseInt(row.getAttribute('data-is-disabled') || '0');
+        
         const statusCol = document.getElementById(`status-col-${taskId}`);
         const runBtnWrap = document.getElementById(`run-btn-wrap-${taskId}`);
         const durationCol = document.getElementById(`duration-col-${taskId}`);
         const lastRunCol = document.getElementById(`lastrun-col-${taskId}`);
+        
         if (!statusCol || !runBtnWrap) return;
-        const safeName = document.getElementById(`row-${taskId}`).cells[2].innerText.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-        if(statusCol.innerHTML.indexOf('已禁用') === -1) {
-            if (status === 'Queued') {
-                statusCol.innerHTML = `<span class="badge-soft" style="background:#EDE9FE;color:#7C3AED;">排队中</span>`;
-                runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">取消</button>`;
-                if (durationCol) durationCol.innerText = "排队中...";
-                if (lastRunCol && msg.last_run) lastRunCol.innerText = msg.last_run;
-                setTaskState(taskId, 'Queued');
-            } else if (status === 'Running') {
-                statusCol.innerHTML = `<span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>`;
-                runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">停止</button>`;
-                if (durationCol) durationCol.innerText = "执行中...";
-                if (lastRunCol && msg.last_run) lastRunCol.innerText = msg.last_run;
-                setTaskState(taskId, 'Running');
+        
+        if (status === 'Queued') {
+            statusCol.innerHTML = `<span class="badge-soft" style="background:#EDE9FE;color:#7C3AED;">排队中</span>`;
+            statusCol.dataset.taskState = 'Queued';
+            runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">取消</button>`;
+            if (durationCol) durationCol.innerText = "排队中...";
+            if (lastRunCol && msg.last_run) lastRunCol.innerText = msg.last_run;
+            setTaskState(taskId, 'Queued');
+        } else if (status === 'Running') {
+            statusCol.innerHTML = `<span class="badge-soft badge-soft-success"><span class="spinner-grow spinner-grow-sm me-1" style="width:0.4rem;height:0.4rem;"></span>运行中</span>`;
+            statusCol.dataset.taskState = 'Running';
+            runBtnWrap.innerHTML = `<button class="action-link text-danger" onclick="stopTask(${taskId})">停止</button>`;
+            if (durationCol) durationCol.innerText = "执行中...";
+            if (lastRunCol && msg.last_run) lastRunCol.innerText = msg.last_run;
+            setTaskState(taskId, 'Running');
+        } else {
+            if (isDisabled === 1) {
+                statusCol.innerHTML = `<span class="badge-soft badge-soft-warning">已禁用</span>`;
+                statusCol.dataset.taskState = 'Disabled';
+                setTaskState(taskId, 'Disabled');
             } else {
                 statusCol.innerHTML = status === 'Idle' ? `<span class="badge-soft badge-soft-secondary">空闲</span>` : `<span class="badge-soft badge-soft-danger">出错</span>`;
-                runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId}, ${JSON.stringify(safeName)})">运行</button>`;
-                if (durationCol && msg.duration) durationCol.innerText = msg.duration;
+                statusCol.dataset.taskState = status === 'Idle' ? 'Idle' : 'Error';
                 setTaskState(taskId, status === 'Idle' ? 'Idle' : 'Error');
             }
+            runBtnWrap.innerHTML = `<button class="action-link" onclick="runTask(${taskId})">运行</button>`;
+            if (durationCol && msg.duration) durationCol.innerText = msg.duration;
         }
     });
 </script>

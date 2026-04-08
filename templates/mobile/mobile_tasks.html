@@ -36,7 +36,7 @@
 
 <div class="accordion-list" id="mobileTaskList">
     {% for task in pagination.items %}
-    <div class="task-item" id="item-{{ task.id }}" data-task-id="{{ task.id }}" data-original-index="{{ loop.index0 }}">
+    <div class="task-item" id="item-{{ task.id }}" data-task-id="{{ task.id }}" data-original-index="{{ loop.index0 }}" data-is-disabled="{{ task.is_disabled }}">
         <div class="task-row" onclick="document.getElementById('item-{{ task.id }}').classList.toggle('expanded')">
             <div class="task-info">
                 <div class="status-ring {% if task.is_disabled == 1 %}disabled{% elif task.status == 'Queued' %}running{% elif task.status == 'Running' %}running{% elif task.status == 'Error' %}error{% else %}idle{% endif %}" id="ring-{{ task.id }}"></div>
@@ -327,16 +327,19 @@
                     const ring = document.getElementById(`ring-${id}`);
                     const quickWrap = document.getElementById(`quick-action-${id}`);
                     const statusText = document.getElementById(`status-text-${id}`);
+                    const item = document.getElementById(`item-${id}`);
+                    const isDisabled = item ? parseInt(item.getAttribute('data-is-disabled') || '0') : 0;
+
                     if (ring) {
-                        ring.className = 'status-ring idle';
+                        ring.className = isDisabled === 1 ? 'status-ring disabled' : 'status-ring idle';
                     }
                     if (quickWrap) {
                         quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
                     }
                     if (statusText) {
-                        statusText.innerHTML = `<i class="bi bi-activity me-1"></i>空闲`;
+                        statusText.innerHTML = `<i class="bi bi-activity me-1"></i>${isDisabled === 1 ? '已禁用' : '空闲'}`;
                     }
-                    setMobileTaskState(id, 'Idle');
+                    setMobileTaskState(id, isDisabled === 1 ? 'Disabled' : 'Idle');
                 } else {
                     alert(data.msg || '停止失败');
                 }
@@ -375,9 +378,15 @@
 
     socket.on('task_status', function(msg) {
         const id = msg.task_id;
+        const item = document.getElementById(`item-${id}`);
+        if (!item) return;
+
+        const isDisabled = parseInt(item.getAttribute('data-is-disabled') || '0');
+
         const ring = document.getElementById(`ring-${id}`);
         const quickWrap = document.getElementById(`quick-action-${id}`);
         const statusText = document.getElementById(`status-text-${id}`);
+        
         if(!ring || !quickWrap) return;
         
         if(msg.status === 'Queued') {
@@ -391,10 +400,16 @@
             if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>运行中`;
             setMobileTaskState(id, 'Running');
         } else {
-            ring.className = msg.status === 'Idle' ? 'status-ring idle' : 'status-ring error';
+            if (isDisabled === 1) {
+                ring.className = 'status-ring disabled';
+                if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>已禁用`;
+                setMobileTaskState(id, 'Disabled');
+            } else {
+                ring.className = msg.status === 'Idle' ? 'status-ring idle' : 'status-ring error';
+                if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>${msg.status === 'Idle' ? '空闲' : '出错'}`;
+                setMobileTaskState(id, msg.status === 'Idle' ? 'Idle' : 'Error');
+            }
             quickWrap.innerHTML = `<button class="btn-quick-run" onclick="event.stopPropagation(); runTask(${id})"><i class="bi bi-play-fill"></i></button>`;
-            if (statusText) statusText.innerHTML = `<i class="bi bi-activity me-1"></i>${msg.status === 'Idle' ? '空闲' : '出错'}`;
-            setMobileTaskState(id, msg.status === 'Idle' ? 'Idle' : 'Error');
         }
     });
 </script>
