@@ -3,6 +3,7 @@ import threading
 from datetime import datetime
 from flask import request, redirect, url_for, jsonify
 from flask_login import login_required
+from sqlalchemy import case
 from apscheduler.triggers.cron import CronTrigger
 from backend.models import db, Task, TaskView
 from backend.core.template import render_template
@@ -50,7 +51,15 @@ def init_app(app, add_job_to_scheduler):
                 (Task.command.like(keyword_like))
             )
 
-        pagination = query.order_by(Task.is_disabled.asc(), Task.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+        pagination = query.order_by(
+            case(
+                (Task.status == 'Running', 0),
+                (Task.status == 'Queued', 1),
+                else_=2
+            ),
+            Task.is_disabled.asc(),
+            Task.id.desc()
+        ).paginate(page=page, per_page=per_page, error_out=False)
 
         source_views = TaskView.query.filter_by(is_visible=1).order_by(TaskView.sort_order.asc(), TaskView.id.asc()).all()
         all_views = TaskView.query.order_by(TaskView.sort_order.asc(), TaskView.id.asc()).all()
@@ -283,5 +292,3 @@ def init_app(app, add_job_to_scheduler):
                 with open(os.path.join(task_log_dir, files[0]), 'r', encoding='utf-8') as f: 
                     return jsonify({"content": f.read()})
         return jsonify({"content": "暂无日志..."})
-
-import os

@@ -6,7 +6,7 @@ import threading
 import logging
 import traceback
 from werkzeug.security import generate_password_hash
-from backend.core.paths import DATA_DIR
+from backend.core.paths import DATA_DIR, BASE_DIR
 from backend.models import db, User, LoginSecurity
 
 def ensure_login_security():
@@ -102,7 +102,7 @@ if __name__ == '__main__':
 
         threading.Thread(target=start_server, daemon=True).start()
         
-        window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800, text_select=True)
+        window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800, text_select=True, icon=os.path.join(BASE_DIR, 'static', 'images', 'logo.png') if os.path.exists(os.path.join(BASE_DIR, 'static', 'images', 'logo.png')) else None)
 
         def on_closing():
             logging.debug("触发 on_closing 事件: 用户点击了右上角关闭按钮")
@@ -128,6 +128,15 @@ if __name__ == '__main__':
             os._exit(0)
 
         def create_tray_icon():
+            try:
+                logo_path = os.path.join(BASE_DIR, 'static', 'images', 'logo.png')
+                if os.path.exists(logo_path):
+                    image = Image.open(logo_path).convert('RGB')
+                    if image.size != (64, 64):
+                        image = image.resize((64, 64), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.ANTIALIAS)
+                    return image
+            except:
+                pass
             image = Image.new('RGB', (64, 64), color=(37, 99, 235))
             draw = ImageDraw.Draw(image)
             draw.rectangle((16, 16, 48, 48), fill="white")
