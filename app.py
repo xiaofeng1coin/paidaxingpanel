@@ -102,7 +102,8 @@ if __name__ == '__main__':
 
         threading.Thread(target=start_server, daemon=True).start()
         
-        window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800, text_select=True, icon=os.path.join(BASE_DIR, 'static', 'images', 'logo.png') if os.path.exists(os.path.join(BASE_DIR, 'static', 'images', 'logo.png')) else None)
+        # [修复] 移除 icon 参数，Windows 平台 create_window 不支持该参数
+        window = webview.create_window('派大星面板', 'http://127.0.0.1:5000', width=1280, height=800, text_select=True)
 
         def on_closing():
             logging.debug("触发 on_closing 事件: 用户点击了右上角关闭按钮")
