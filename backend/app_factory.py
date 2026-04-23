@@ -47,7 +47,7 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_NAME'] = f"patrickpanel_session_{INSTANCE_COOKIE_SUFFIX}"
 app.config['SESSION_COOKIE_PATH'] = '/'
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
 
 db.init_app(app)
 
@@ -107,7 +107,11 @@ def global_security_check():
         'scripts_editor', 'scripts_debug', 'api_debug_run', 'api_debug_stop', 'logs', 'deps', 'envs', 'config_editor', 'settings',
         'api_delete_logs', 'api_task_batch', 'api_scripts_save', 'api_scripts_upload', 'api_update_check', 'api_update_do',
         'api_subs_add', 'api_subs_edit', 'api_subs_delete', 'api_subs_run', 'api_subs_log', 'api_subs_delete_tasks', 'api_subs_toggle',
-        'get_avatar', 'api_restore_backup', 'api_task_views', 'api_task_views_toggle'
+        'get_avatar', 'api_restore_backup', 'api_task_views', 'api_task_views_toggle',
+        'app_tasks', 'app_envs', 'app_env_action',
+        # 👇 关键修复：把所有对任务、变量的增删改查和日志抓取 API 全加上，不再踢回登录页
+        'api_run_task', 'api_stop_task', 'api_get_task_log', 'add_task', 'edit_task', 'toggle_task', 'delete_task',
+        'reorder_envs', 'edit_env', 'toggle_env', 'delete_env', 'app_scripts', 'app_script_read', 'app_config_read', 'app_config_save', 'app_security_save','app_sysconfig', 'app_sysconfig_save', 'app_deps', 'app_dep_add', 'app_dep_del', 'app_syslogs', 'app_syslog_read','api_get_deps_log','app_subs', 'app_sub_action','api_subs_override_info', 'backup_data'
     ]
     if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
         referer = request.headers.get("Referer")
@@ -156,5 +160,6 @@ init_log_routes(app)
 init_setting_routes(app)
 init_update_routes(app)
 init_misc_routes(app)
-
+from backend.routes.api_app import init_app as init_api_app_routes
+init_api_app_routes(app)
 start_scheduler_once(app)
