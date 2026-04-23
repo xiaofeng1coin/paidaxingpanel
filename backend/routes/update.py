@@ -48,7 +48,7 @@ def init_app(app):
                     "changelog": changelog
                 })
             else:
-                return jsonify({"status": "no_update"})
+                return jsonify({"status": "no_update", "local_version": local_version})  # 👈 就加了这一段，补上下发
         except Exception as e:
             return jsonify({"status": "error", "msg": f"检查更新失败: {str(e)}"})
 
