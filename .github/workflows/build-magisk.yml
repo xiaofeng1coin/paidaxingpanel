@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - master
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -28,35 +30,49 @@ jobs:
         cat << 'EOF' > Dockerfile.magisk
         FROM arm64v8/alpine:3.19
         ENV TZ=Asia/Shanghai
-        
+
         # 安装基础运行环境
         RUN apk update && apk add --no-cache \
             python3 py3-pip nodejs npm tzdata bash git curl shadow sqlite busybox-suid
-            
+
         WORKDIR /app
         COPY requirements.txt .
-        
+
         # 安装Python依赖 (在Alpine中使用--break-system-packages允许全局安装)
-        # 增加 gunicorn 以提高稳定性
-        RUN pip install --no-cache-dir --break-system-packages -r requirements.txt gunicorn
-        
+        # [C-1] 启动方式已改为面板原生 python app.py（threading 模式自带 SocketIO 轮询支持），
+        # 不再需要 gunicorn（gunicorn gthread 会让 socket.io 长轮询占满线程池、实时日志假死）
+        RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+
         COPY . .
-        
+
         # 清理不必要的文件以减小体积
         RUN rm -rf /var/cache/apk/* && \
             rm -rf /root/.cache
+        EOF
+
+        # [C-3] 防止 .git 历史/运行数据被 COPY 进 rootfs 镜像（减小体积并避免泄露源码历史）
+        cat << 'EOF' > .dockerignore
+        .git
+        .github
+        data
+        logs
+        __pycache__
+        **/__pycache__
+        *.pyc
+        build
+        dist
         EOF
 
     - name: Build and Export Rootfs
       run: |
         # 构建适用于安卓设备的 arm64 架构镜像
         docker buildx build --platform linux/arm64 -t patrickpanel-arm64 -f Dockerfile.magisk --load .
-        
+
         # 创建一个临时容器并导出其纯净的文件系统
         docker create --name temp-container patrickpanel-arm64
         docker export temp-container -o rootfs.tar
         docker rm temp-container
-        
+
         # 使用 xz 进行极限压缩，大幅度减小面具模块体积
         xz -z -9 -T0 rootfs.tar
 
@@ -66,7 +82,12 @@ jobs:
         # 读取 version.json 中的版本号和更新日志
         VERSION=$(jq -r .version version.json)
         echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-        
+
+        # [C-2] versionCode 用加权计算，保证版本递增不回退
+        # （原 ${APP_VERSION//./} 拼接法：1.3.10 -> 1310，1.4.0 -> 140，会被面具判定为降级）
+        VERSION_CODE=$(echo $VERSION | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
+        echo "APP_VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+
         # 将更新日志导出到文本文件，解决多行文本格式问题
         jq -r .changelog version.json > release_body.txt
 
@@ -74,80 +95,97 @@ jobs:
       run: |
         mkdir magisk_module
         cd magisk_module
-        
+
         # 1. 移动根文件系统
         mv ../rootfs.tar.xz ./
-        
+
         # 2. 创建 module.prop (动态注入版本号)
         cat << EOF > module.prop
         id=patrick_panel
         name=派大星面板 (PatrickPanel)
         version=v${{ env.APP_VERSION }}
-        versionCode=${APP_VERSION//./}
+        versionCode=${{ env.APP_VERSION_CODE }}
         author=xiaofeng1coin
-        description=支持Python3/Nodejs的定时任务面板。Data目录位于内部存储根目录下的 PatrickPanel_Data 文件夹。
+        description=支持Python3/Nodejs的定时任务面板。脚本与日志位于 Download/派大星面板，数据库与密钥存于系统私有目录。
         EOF
-        
+
         # 3. 创建 customize.sh (面具安装脚本)
         cat << 'EOF' > customize.sh
         #!/system/bin/sh
         SKIPUNZIP=0
-        
+
         ui_print "- 正在解压 Alpine Linux 核心环境 (此过程可能需要1-3分钟，请耐心等待)..."
         mkdir -p $MODPATH/alpine
         tar -xf $MODPATH/rootfs.tar.xz -C $MODPATH/alpine
         rm $MODPATH/rootfs.tar.xz
-        
+
         ui_print "- 核心环境解压完成！"
-        ui_print "- 面板数据将安全保存在: /storage/emulated/0/PatrickPanel_Data"
+        ui_print "- 面板脚本与日志保存在: /storage/emulated/0/Download/派大星面板"
+        ui_print "- 数据库与实例密钥保存在系统私有目录（仅 root 可读）"
         ui_print "- 重启手机后，浏览器访问 http://127.0.0.1:5000 即可使用"
         EOF
-        
+
         # 4. 创建 service.sh (开机自启与后台运行脚本)
         cat << 'EOF' > service.sh
         #!/system/bin/sh
         MODDIR=${0%/*}
-        
+
         # 等待安卓系统完全启动，确保外部存储已挂载
         until [ $(getprop sys.boot_completed) -eq 1 ]; do
             sleep 2
         done
         sleep 10
-        
+
         # 定义并创建外部可见的公共数据目录
-        PUBLIC_DATA_DIR="/storage/emulated/0/PatrickPanel_Data"
+        PUBLIC_DATA_DIR="/storage/emulated/0/Download/派大星面板"
         mkdir -p "$PUBLIC_DATA_DIR"
-        
+
         # 挂载必要的内核虚拟文件系统到 chroot 容器内部
         mount -t proc proc "$MODDIR/alpine/proc"
         mount -t sysfs sysfs "$MODDIR/alpine/sys"
         mount -o bind /dev "$MODDIR/alpine/dev"
         mount -o bind /dev/pts "$MODDIR/alpine/dev/pts"
-        
+
         # 修复网络挂载：拷贝安卓的 resolv.conf 和 hosts，确保 DNS 正常
         cp /system/etc/resolv.conf "$MODDIR/alpine/etc/resolv.conf" 2>/dev/null || echo "nameserver 8.8.8.8" > "$MODDIR/alpine/etc/resolv.conf"
         cp /system/etc/hosts "$MODDIR/alpine/etc/hosts" 2>/dev/null
-        
+
         # 将外部存储的数据目录挂载到容器的 /app/data 中
         mkdir -p "$MODDIR/alpine/app/data"
         mount -o bind "$PUBLIC_DATA_DIR" "$MODDIR/alpine/app/data"
-        
-        # 修复 Android 侧组权限问题，使 chroot 内的 root 拥有网络权限
-        export ANDROID_DATA_DIR=/app/data
-        
-        # 使用 chroot 进入环境并后台启动面板，改用 gunicorn 确保多线程正常且绑定到 0.0.0.0
-        chroot "$MODDIR/alpine" /bin/sh -c "
+
+        # [加固 P2-4] 数据库/依赖环境/实例密钥分离到模块外的系统私有目录（仅 root 可读）。
+        # 共享存储上的 auth.db 与 instance_id 可被任意应用读取——instance_id 是会话签名密钥的
+        # 唯一来源，泄露即可离线伪造管理员会话 Cookie（完全绕过密码与两步验证）。
+        PRIVATE_DIR="/data/adb/patrick_panel_private"
+        mkdir -p "$PRIVATE_DIR/db" "$PRIVATE_DIR/deps_env"
+        mkdir -p "$MODDIR/alpine/app/data/db" "$MODDIR/alpine/app/data/deps_env"
+        # 兼容升级：旧版本数据落在共享存储，首次启动时迁移到私有目录
+        if [ ! -f "$PRIVATE_DIR/db/instance_id" ] && [ -d "$PUBLIC_DATA_DIR/db" ]; then
+            cp -r "$PUBLIC_DATA_DIR/db/." "$PRIVATE_DIR/db/" 2>/dev/null
+            cp -r "$PUBLIC_DATA_DIR/deps_env/." "$PRIVATE_DIR/deps_env/" 2>/dev/null
+        fi
+        mount -o bind "$PRIVATE_DIR/db" "$MODDIR/alpine/app/data/db"
+        mount -o bind "$PRIVATE_DIR/deps_env" "$MODDIR/alpine/app/data/deps_env"
+
+        # 使用 chroot 进入环境并后台启动面板
+        # [C-1] 改用面板原生 python app.py 启动（threading 模式自带 SocketIO 轮询支持，
+        # 兼容无终端环境由面板启动逻辑保证），并加守护循环：
+        # 面板内"还原备份/更新"会主动退出进程，守护循环负责自动拉起
+        nohup chroot "$MODDIR/alpine" /bin/sh -c "
             export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             export ANDROID_DATA_DIR=/app/data
             # 为 root 增加 inet 组权限
             addgroup -g 3003 inet 2>/dev/null
             addgroup root inet 2>/dev/null
-            cd /app
-            # 使用 Gunicorn 启动
-            nohup gunicorn --worker-class gthread --threads 10 --bind 0.0.0.0:5000 app:app > /app/data/run.log 2>&1 &
-        "
+            while true; do
+                cd /app
+                python app.py >> /app/data/run.log 2>&1
+                sleep 3
+            done
+        " &
         EOF
-        
+
         # 赋予执行权限
         chmod +x customize.sh service.sh
 
