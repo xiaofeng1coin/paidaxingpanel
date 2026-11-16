@@ -11,10 +11,12 @@ a = Analysis(
         ('templates', 'templates'),
         ('static', 'static'),
         ('version.json', '.'),
-        ('database.py', '.')
+        ('database.py', '.'),
+        ('init_scripts', 'init_scripts')
     ],
     hiddenimports=[
         'engineio.async_drivers.threading',
+        'simple_websocket',  # [C-5] flask-socketio 运行时 try-import，需显式声明避免 WebSocket 降级为长轮询
         'flask_sqlalchemy',
         'flask_login',
         'flask_socketio',

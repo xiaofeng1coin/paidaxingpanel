@@ -10,6 +10,7 @@
 <div class="login-wrapper">
     <div class="login-card">
         <form method="POST" action="/login">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {% if need_2fa %}
                 <div class="text-center mb-4">
                     <div class="logo-box" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%);">
@@ -19,8 +20,7 @@
                     <div class="login-subtitle">为保障安全，请输入安全验证码</div>
                 </div>
 
-                <input type="hidden" name="username" value="{{ temp_user }}">
-                <input type="hidden" name="password" value="{{ temp_pwd }}">
+                <!-- [加固 P1-1] 第二步仅提交动态码：待验证用户保存在服务端 session -->
 
                 <div class="mb-4">
                     <input type="number" name="totp_code" class="form-control totp-input" placeholder="------" autofocus required maxlength="6">

@@ -4,13 +4,13 @@ import tempfile
 import subprocess
 import threading
 import re
-import time
 from flask import request, redirect, url_for, jsonify
 from flask_login import login_required
 from werkzeug.utils import secure_filename
 from backend.core.template import render_template
 from backend.core.paths import SCRIPTS_DIR
 from backend.core.security import get_safe_path
+from backend.core.proc_utils import kill_process_tree
 from backend.runtime import SUBPROCESS_KWARGS, debug_processes
 from backend.services.executors import execute_debug
 from backend.extensions import socketio
@@ -23,7 +23,9 @@ def init_app(app):
         all_files = []
 
         for root, dirs, files in os.walk(SCRIPTS_DIR):
-            if '.git' in root or '__pycache__' in root:
+            # [加固 P3-24] 按路径分量判断，'my.github' 等合法目录不再被误跳过
+            walk_parts = root.replace('\\', '/').split('/')
+            if '.git' in walk_parts or '__pycache__' in walk_parts:
                 continue
             rel_dir = os.path.relpath(root, SCRIPTS_DIR).replace('\\', '/')
             if rel_dir == '.': rel_dir = '根目录'
@@ -55,8 +57,9 @@ def init_app(app):
                 save_path = get_safe_path(SCRIPTS_DIR, raw_filename)
                 if save_path:
                     os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    # [修复 P2-6] 表单缺 content 字段时原实现直接 AttributeError 导致 500
                     with open(save_path, 'w', encoding='utf-8') as f:
-                        f.write(request.form.get('content').replace('\r\n', '\n'))
+                        f.write((request.form.get('content') or '').replace('\r\n', '\n'))
                     return redirect(url_for('scripts_editor', file=os.path.relpath(save_path, SCRIPTS_DIR).replace('\\', '/')))
 
         if os.path.exists(target_path) and os.path.isfile(target_path):
@@ -103,6 +106,10 @@ def init_app(app):
         if not original_name:
             return jsonify({"status": "error", "msg": "文件名无效"})
 
+        # [加固 P3-19] 脚本上传单文件 10MB 上限
+        if file.content_length and file.content_length > 10 * 1024 * 1024:
+            return jsonify({"status": "error", "msg": "文件大小超过 10MB 上限"})
+
         ext = os.path.splitext(original_name)[1].lower()
         if ext not in ['.js', '.py', '.sh']:
             return jsonify({"status": "error", "msg": "仅支持上传 js、py、sh 文件"})
@@ -122,7 +129,8 @@ def init_app(app):
         if not save_path:
             return jsonify({"status": "error", "msg": "非法路径禁止上传"})
 
-        if os.path.dirname(save_path) != os.path.abspath(SCRIPTS_DIR):
+        # [加固] 与 get_safe_path 的 realpath 口径统一，避免符号链接部署时误拒合法上传
+        if os.path.dirname(save_path) != os.path.realpath(SCRIPTS_DIR):
             return jsonify({"status": "error", "msg": "上传文件只能保存到 scripts 根目录"})
 
         try:
@@ -137,7 +145,9 @@ def init_app(app):
     def scripts_debug():
         files = []
         for root, dirs, f_names in os.walk(SCRIPTS_DIR):
-            if '.git' in root or '__pycache__' in root:
+            # [加固 P3-24] 按路径分量判断
+            walk_parts = root.replace('\\', '/').split('/')
+            if '.git' in walk_parts or '__pycache__' in walk_parts:
                 continue
             for f in f_names:
                 if f.endswith(('.js', '.py', '.sh', '.json', '.txt')):
@@ -170,7 +180,9 @@ def init_app(app):
         raw_filename = request.form.get('filename')
         if not raw_filename: return jsonify({"status": "error"})
 
-        stream_id = f"debug_{int(time.time())}"
+        # [加固 P3-20] stream_id 用随机串：秒级时间戳在同秒内两次调试会碰撞、产生孤儿进程
+        import uuid as _uuid
+        stream_id = f"debug_{_uuid.uuid4().hex[:12]}"
         threading.Thread(target=execute_debug, args=(app, raw_filename, stream_id), daemon=True).start()
         return jsonify({"status": "success", "stream_id": stream_id})
 
@@ -180,15 +192,11 @@ def init_app(app):
     def api_debug_stop():
         stream_id = request.form.get('stream_id')
         if not stream_id: return jsonify({"status": "error"})
-        
+
         if stream_id in debug_processes:
-            try:
-                debug_processes[stream_id].kill()
-            except:
-                pass
-            finally:
-                debug_processes.pop(stream_id, None)
-                socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n🛑 手动停止\n"})
+            # [修复 P1-4] 终止整棵进程树
+            kill_process_tree(debug_processes.pop(stream_id, None))
+            socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n🛑 手动停止\n"})
         return jsonify({"status": "success"})
 
 

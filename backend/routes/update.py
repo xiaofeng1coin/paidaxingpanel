@@ -16,6 +16,16 @@ from backend.core.paths import VERSION_FILE, BASE_DIR
 from backend.extensions import socketio
 from backend.runtime import SUBPROCESS_KWARGS
 
+def _sha256_of_file(path):
+    """[加固 P2-10] 计算文件 SHA256，用于更新包完整性校验。"""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def init_app(app):
     @app.route('/api/update/check', methods=['GET'])
     @login_required
@@ -90,15 +100,45 @@ def init_app(app):
                     req = urllib.request.Request(exe_url, headers={'User-Agent': 'Mozilla/5.0'})
                     with urllib.request.urlopen(req, timeout=120) as res, open(new_exe_path, 'wb') as f:
                         shutil.copyfileobj(res, f)
-                    
+
+                    # [加固 P2-10] 完整性校验：发布方在 version.json 提供 sha256 时强制比对，
+                    # 下载损坏/被篡改的更新包不再覆盖旧程序（无字段时兼容旧发布并提示）
+                    expected_hash = str(remote_data.get('sha256') or '').strip().lower()
+                    if expected_hash:
+                        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"🔒 正在校验新版完整性(SHA256)...\n"})
+                        actual_hash = _sha256_of_file(new_exe_path)
+                        if actual_hash != expected_hash:
+                            raise Exception("新版本完整性校验失败（SHA256 不匹配），已中止更新，旧程序未受影响")
+                        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"✅ 完整性校验通过\n"})
+                    else:
+                        socketio.emit('log_stream', {'task_id': stream_id, 'data': f"⚠️ 本次发布未提供 SHA256 校验值，跳过完整性校验\n"})
+
                     socketio.emit('log_stream', {'task_id': stream_id, 'data': f"✅ 新版 EXE 下载完成，准备执行热替换脚本...\n"})
                     socketio.emit('log_stream', {'task_id': stream_id, 'data': f"⚠️ 注意：面板即将短暂关闭并自动重启，请不要关闭当前页面，稍候...\n"})
                     time.sleep(2)
 
                     current_exe_path = sys.executable
                     bat_path = os.path.join(temp_dir, "update.bat")
-                    with open(bat_path, "w", encoding="utf-8") as f:
-                        f.write(f"""@echo off
+                    # [修复 P0-5] 中文版 Windows 的 cmd 按 GBK 解析 bat 文件，
+                    # UTF-8 写入会使含中文的安装路径变成乱码，导致 move/start 全部失败；
+                    # 改用 GBK 编码写入（GBK 缺字时退化为替换符，不影响常规路径）。
+                    try:
+                        bat_content = f"""@echo off
+                    echo Updating PatrickPanel... Please wait...
+                    timeout /t 2 /nobreak > NUL
+                    if exist "{current_exe_path}.bak" del /q "{current_exe_path}.bak"
+                    copy /y "{current_exe_path}" "{current_exe_path}.bak"
+                    move /y "{new_exe_path}" "{current_exe_path}"
+                    start "" "{current_exe_path}"
+                    del "%~f0"
+                    """
+                        with open(bat_path, "w", encoding="gbk", errors="replace") as f:
+                            f.write(bat_content)
+                    except Exception:
+                        # 兜底：极少数字符 GBK 无法表示时，退回 UTF-8 并切 65001 代码页
+                        with open(bat_path, "w", encoding="utf-8") as f:
+                            f.write(f"""@echo off
+                    chcp 65001 >nul
                     echo Updating PatrickPanel... Please wait...
                     timeout /t 2 /nobreak > NUL
                     move /y "{new_exe_path}" "{current_exe_path}"
@@ -141,6 +181,13 @@ def init_app(app):
                     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                     with urllib.request.urlopen(req, timeout=60) as res:
                         zip_data = res.read()
+
+                    # [加固 P2-10] 源码包完整性校验（发布方在 version.json 提供 sha256_source 时启用）
+                    expected_src_hash = str(remote_data.get('sha256_source') or '').strip().lower()
+                    if expected_src_hash:
+                        import hashlib
+                        if hashlib.sha256(zip_data).hexdigest() != expected_src_hash:
+                            raise Exception("源码包完整性校验失败（SHA256 不匹配），已中止更新")
                     
                     socketio.emit('log_stream', {'task_id': stream_id, 'data': f"✅ 源码下载完成 ({(len(zip_data)//1024):,} KB)，正在预解压...\n"})
                     
@@ -191,7 +238,7 @@ def init_app(app):
                     
                     try:
                         shutil.rmtree(temp_dir, ignore_errors=True)
-                    except:
+                    except Exception:
                         pass
                     
                     time.sleep(1)

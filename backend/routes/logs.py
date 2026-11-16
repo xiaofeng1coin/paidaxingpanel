@@ -4,6 +4,7 @@ from flask_login import login_required
 from backend.core.template import render_template
 from backend.core.paths import LOGS_DIR
 from backend.core.security import get_safe_path
+from backend.core.file_utils import read_text_tail
 
 def init_app(app):
     @app.route('/logs')
@@ -22,7 +23,8 @@ def init_app(app):
             # [安全修复] 使用 get_safe_path
             filepath = get_safe_path(LOGS_DIR, os.path.join(raw_current_folder, raw_current_file))
             if filepath and os.path.exists(filepath):
-                with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
+                # [修复 P2-5] 日志过大时只展示末尾内容
+                content = read_text_tail(filepath)
 
         return render_template('logs.html', tree=tree, current_folder=raw_current_folder, current_file=raw_current_file,
                            content=content)

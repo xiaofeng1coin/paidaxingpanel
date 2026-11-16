@@ -36,7 +36,7 @@
                 <button class="btn-action" onclick="syncSub({{ sub.id }})"><i class="bi bi-arrow-repeat me-1"></i>同步</button>
                 <button class="btn-action secondary" onclick='openEditSubModal({{ sub.id }}, {{ sub.name | tojson }}, {{ sub.url | tojson }}, {{ (sub.type or "") | tojson }}, {{ (sub.branch or "") | tojson }}, {{ (sub.cron or "") | tojson }})'><i class="bi bi-pencil-square me-1"></i>编辑</button>
                 <button class="btn-action secondary" onclick='showOverridePath({{ sub.name | tojson }}, {{ sub.alias | tojson }})'><i class="bi bi-folder2-open me-1"></i>目录</button>
-                <button class="btn-action danger" onclick="if(confirm('删除该订阅？')) window.location.href='/subs/delete/{{ sub.id }}?page={{ pagination.page }}'"><i class="bi bi-trash3 me-1"></i>删除</button>
+                <button class="btn-action danger" onclick="postAction('/subs/delete/{{ sub.id }}?page={{ pagination.page }}', '删除该订阅？')"><i class="bi bi-trash3 me-1"></i>删除</button>
             </div>
         </div>
     </div>
@@ -63,6 +63,7 @@
 <div class="modal fade" id="addSubModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered mx-3">
         <form class="modal-content border-0 rounded-4" method="POST" action="/subs/add">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <div class="modal-header border-0 pb-0">
                 <h6 class="modal-title fw-bold">新增订阅</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -88,6 +89,7 @@
 <div class="modal fade" id="editSubModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered mx-3">
         <form class="modal-content border-0 rounded-4" id="editSubForm" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <div class="modal-header border-0 pb-0">
                 <h6 class="modal-title fw-bold">编辑订阅</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>

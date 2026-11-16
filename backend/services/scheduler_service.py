@@ -2,14 +2,18 @@ import os
 import sys
 import time
 import shutil
+import logging
 import threading
+from datetime import datetime, timedelta
 from sqlalchemy import text
-from apscheduler.triggers.cron import CronTrigger
-from backend.models import db, Task, Dependency, Subscription, TaskView, SystemConfig
-from backend.extensions import scheduler
+from backend.models import db, Task, Dependency, Subscription, TaskView, SystemConfig, LoginLog
+from backend.core.cron_utils import build_cron_trigger
+from backend.extensions import scheduler, socketio
 from backend.core.paths import LOGS_DIR, SCRIPTS_DIR, BASE_DIR, CONFIG_FILE
-from backend.core.task_helpers import parse_script_meta
+from backend.core.task_helpers import parse_script_meta, ensure_task_view
 from backend.services.executors import execute_subscription, enqueue_task_execution, start_task_queue_worker
+
+logger = logging.getLogger('scheduler')
 
 def add_job_to_scheduler(app, task):
     if getattr(task, 'is_disabled', 0) == 1: return
@@ -17,9 +21,14 @@ def add_job_to_scheduler(app, task):
     if scheduler.get_job(job_id): scheduler.remove_job(job_id)
     try:
         tz_str = os.environ.get('TZ', 'Asia/Shanghai')
-        scheduler.add_job(enqueue_task_execution, CronTrigger.from_crontab(task.cron, timezone=tz_str), args=[app, task.id, False, 'schedule'], id=job_id)
-    except:
-        pass
+        scheduler.add_job(enqueue_task_execution, build_cron_trigger(task.cron, timezone=tz_str), args=[app, task.id, False, 'schedule'], id=job_id)
+    except Exception as e:
+        # [修复 P2-1] cron 注册失败原先完全静默，用户无法知道任务为何从不执行
+        logger.error("任务[%s]定时规则非法，未注册调度: cron=%r (%s)", task.name, task.cron, e)
+        try:
+            socketio.emit('log_stream', {'task_id': task.id, 'data': f"⚠️ 任务[{task.name}]的 cron 规则非法({task.cron})，定时调度未注册，请修正规则后重新启用\n"})
+        except Exception:
+            pass
 
 def add_sub_job_to_scheduler(app, sub):
     if getattr(sub, 'is_disabled', 0) == 1: return
@@ -28,24 +37,42 @@ def add_sub_job_to_scheduler(app, sub):
     try:
         tz_str = os.environ.get('TZ', 'Asia/Shanghai')
         if sub.cron:
-            scheduler.add_job(execute_subscription, CronTrigger.from_crontab(sub.cron, timezone=tz_str), args=[app, sub.id], id=job_id)
-    except:
-        pass
+            scheduler.add_job(execute_subscription, build_cron_trigger(sub.cron, timezone=tz_str), args=[app, sub.id], id=job_id)
+    except Exception as e:
+        logger.error("订阅[%s]定时规则非法，未注册调度: cron=%r (%s)", sub.name, sub.cron, e)
+        try:
+            socketio.emit('log_stream', {'task_id': f"sub_{sub.id}", 'data': f"⚠️ 订阅[{sub.name}]的 cron 规则非法({sub.cron})，定时调度未注册，请修正规则后重新启用\n"})
+        except Exception:
+            pass
 
 def auto_clean_logs(app):
     with app.app_context():
         try:
             clean_cfg = SystemConfig.query.filter_by(key='log_clean_days').first()
             days = int(clean_cfg.value) if clean_cfg and str(clean_cfg.value).isdigit() else 7
-            cutoff = __import__('datetime').datetime.now() - __import__('datetime').timedelta(days=days)
+            cutoff = datetime.now() - timedelta(days=days)
             for root, dirs, files in os.walk(LOGS_DIR):
                 for file in files:
                     if file.endswith('.log'):
                         filepath = os.path.join(root, file)
-                        if __import__('datetime').datetime.fromtimestamp(os.path.getmtime(filepath)) < cutoff:
-                            os.remove(filepath)
-        except:
-            pass
+                        if datetime.fromtimestamp(os.path.getmtime(filepath)) < cutoff:
+                            try:
+                                os.remove(filepath)
+                            except OSError:
+                                pass
+            # [修复 P2-14] 清理已被清空的日志目录，避免空目录无限累积
+            for root, dirs, files in os.walk(LOGS_DIR, topdown=False):
+                if root != LOGS_DIR and not os.listdir(root):
+                    try:
+                        os.rmdir(root)
+                    except OSError:
+                        pass
+            # [优化] 登录日志随同一保留期自动清理（login_time 为同格式字符串，可直接比较）
+            cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+            LoginLog.query.filter(LoginLog.login_time < cutoff_str).delete(synchronize_session=False)
+            db.session.commit()
+        except Exception:
+            logger.warning("日志自动清理任务异常", exc_info=True)
 
 def ensure_auto_import_exclude_config():
     default_excludes = [
@@ -71,7 +98,7 @@ def ensure_auto_import_exclude_config():
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             content = f.read()
-    except:
+    except Exception:
         content = ""
 
     if 'AUTO_IMPORT_EXCLUDE_FILES' not in content:
@@ -97,13 +124,37 @@ def get_auto_import_exclude_files():
                     if item:
                         exclude_files.add(item)
                 break
-    except:
-        pass
+    except Exception:
+        logger.warning("读取自动导入排除清单失败", exc_info=True)
     return exclude_files
+
+def _read_config_flag(name):
+    """读取 config.sh 中的布尔开关（export NAME="0"/"false"）；未配置返回 None（默认行为）。
+    [加固 P2-9] 共享存储的 scripts 目录可被其他应用投放脚本并被自动收编执行，
+    提供 AUTO_IMPORT_ENABLED 开关，部署在共享存储环境时建议显式关闭自动导入。"""
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            for raw_line in f:
+                line = raw_line.strip().replace('\ufeff', '')
+                if line.startswith(f'export {name}='):
+                    value = line.split('=', 1)[1].strip().strip('"').strip("'").lower()
+                    if value in ('0', 'false', 'off', 'no'):
+                        return False
+                    if value in ('1', 'true', 'on', 'yes'):
+                        return True
+                    return None
+    except Exception:
+        pass
+    return None
+
 
 def auto_import_local_scripts(app):
     with app.app_context():
         try:
+            # [加固 P2-9] AUTO_IMPORT_ENABLED="0" 时跳过自动导入（防止共享存储脚本被投毒自动执行）
+            if _read_config_flag('AUTO_IMPORT_ENABLED') is False:
+                return
+
             existing_commands = {t.command for t in Task.query.all()}
             default_cron = '0 0 * * *'
             exclude_files = get_auto_import_exclude_files()
@@ -116,7 +167,7 @@ def auto_import_local_scripts(app):
                 if rel_root == '.':
                     rel_root = ''
 
-                if '.git' in root or '__pycache__' in root:
+                if '.git' in rel_root.split('/') or '__pycache__' in rel_root.split('/'):
                     continue
 
                 path_parts = set(rel_root.split('/')) if rel_root else set()
@@ -139,11 +190,7 @@ def auto_import_local_scripts(app):
                     if rel_path in existing_commands:
                         continue
 
-                    task_exists = Task.query.filter_by(command=rel_path).first()
-                    if task_exists:
-                        existing_commands.add(rel_path)
-                        continue
-
+                    # [修复 P2-10] 内存集合已覆盖全部存量 command，删除原先的逐文件 DB 查询
                     script_name, script_cron = parse_script_meta(full_path, os.path.splitext(os.path.basename(file_name))[0])
                     cron_to_use = script_cron if script_cron else default_cron
 
@@ -159,101 +206,53 @@ def auto_import_local_scripts(app):
                     db.session.add(new_task)
                     db.session.commit()
 
-                    if not TaskView.query.filter_by(source_key='manual').first():
-                        db.session.add(TaskView(
-                            name='单脚本',
-                            source_key='manual',
-                            source_type='manual',
-                            is_visible=0,
-                            is_system=1,
-                            sort_order=0
-                        ))
-                        db.session.commit()
+                    # [修复 P2-22] TaskView 创建统一走 ensure_task_view
+                    ensure_task_view('单脚本', 'manual', 'manual', is_system=1, sort_order=0)
 
                     add_job_to_scheduler(app, new_task)
                     existing_commands.add(rel_path)
-        except:
-            pass
+        except Exception:
+            logger.warning("本地脚本自动导入异常", exc_info=True)
+
+def _ensure_column(engine, table, column, ddl):
+    """[修复 P2-25] 轻量列迁移：列不存在时执行 DDL 补齐，集中替代原先成片的 try-SELECT/ALTER 模板代码。
+    返回 True 表示本次执行了迁移。"""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(f'SELECT {column} FROM {table} LIMIT 1'))
+        return False
+    except Exception:
+        pass
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {ddl}'))
+        print(f"Successfully migrated {table}.{column}")
+        return True
+    except Exception:
+        logger.warning("迁移 %s.%s 失败", table, column, exc_info=True)
+        return False
+
 
 def run_scheduler_forever(app):
     with app.app_context():
         db.create_all()
 
         engine = db.engines['tasks']
-        try:
-            with engine.connect() as conn:
-                conn.execute(text('SELECT last_duration FROM task LIMIT 1'))
-        except Exception:
-            try:
-                with engine.begin() as conn:
-                    conn.execute(text('ALTER TABLE task ADD COLUMN last_duration VARCHAR(20) DEFAULT "-"'))
-                    conn.execute(text('ALTER TABLE task ADD COLUMN is_disabled INTEGER DEFAULT 0'))
-                print("Successfully migrated tasks.db with new columns.")
-            except Exception:
-                pass
+        # [加固] 凭据版本号列（改密后使其他会话失效）
+        _ensure_column(db.engine, 'user', 'cred_version', 'cred_version INTEGER DEFAULT 0')
+        _ensure_column(engine, 'task', 'last_duration', 'last_duration VARCHAR(20) DEFAULT "-"')
+        _ensure_column(engine, 'task', 'is_disabled', 'is_disabled INTEGER DEFAULT 0')
+        _ensure_column(engine, 'subscription', 'alias', 'alias VARCHAR(50) DEFAULT "sub_default"')
+        _ensure_column(engine, 'subscription', 'is_disabled', 'is_disabled INTEGER DEFAULT 0')
+        _ensure_column(engine, 'task', 'source_type', "source_type VARCHAR(20) DEFAULT 'manual'")
+        _ensure_column(engine, 'task', 'source_key', "source_key VARCHAR(100) DEFAULT 'manual'")
+        _ensure_column(engine, 'task', 'source_name', "source_name VARCHAR(100) DEFAULT '单脚本'")
 
         try:
-            with engine.connect() as conn:
-                conn.execute(text('SELECT alias FROM subscription LIMIT 1'))
-        except Exception:
-            try:
-                with engine.begin() as conn:
-                    conn.execute(text('ALTER TABLE subscription ADD COLUMN alias VARCHAR(50) DEFAULT "sub_default"'))
-                print("Successfully migrated tasks.db subscription with alias column.")
-            except Exception:
-                pass
-
-        try:
-            with engine.connect() as conn:
-                conn.execute(text('SELECT is_disabled FROM subscription LIMIT 1'))
-        except Exception:
-            try:
-                with engine.begin() as conn:
-                    conn.execute(text('ALTER TABLE subscription ADD COLUMN is_disabled INTEGER DEFAULT 0'))
-                print("Successfully migrated tasks.db subscription with is_disabled column.")
-            except Exception:
-                pass
-
-        try:
-            with engine.connect() as conn:
-                conn.execute(text('SELECT source_type FROM task LIMIT 1'))
-        except Exception:
-            try:
-                with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE task ADD COLUMN source_type VARCHAR(20) DEFAULT 'manual'"))
-                print("Successfully migrated tasks.db task with source_type column.")
-            except Exception:
-                pass
-
-        try:
-            with engine.connect() as conn:
-                conn.execute(text('SELECT source_key FROM task LIMIT 1'))
-        except Exception:
-            try:
-                with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE task ADD COLUMN source_key VARCHAR(100) DEFAULT 'manual'"))
-                print("Successfully migrated tasks.db task with source_key column.")
-            except Exception:
-                pass
-
-        try:
-            with engine.connect() as conn:
-                conn.execute(text('SELECT source_name FROM task LIMIT 1'))
-        except Exception:
-            try:
-                with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE task ADD COLUMN source_name VARCHAR(100) DEFAULT '单脚本'"))
-                print("Successfully migrated tasks.db task with source_name column.")
-            except Exception:
-                pass
-
-        try:
-            with engine.connect() as conn:
-                conn.execute(text('SELECT status FROM task LIMIT 1'))
             with engine.begin() as conn:
                 conn.execute(text("UPDATE task SET status = 'Idle' WHERE status IN ('Running', 'Queued')"))
         except Exception:
-            pass
+            logger.warning("复位遗留任务状态失败", exc_info=True)
 
         try:
             with engine.begin() as conn:
@@ -261,54 +260,31 @@ def run_scheduler_forever(app):
                 conn.execute(text("UPDATE task SET source_key = 'manual' WHERE source_key IS NULL OR source_key = ''"))
                 conn.execute(text("UPDATE task SET source_name = '单脚本' WHERE source_name IS NULL OR source_name = ''"))
         except Exception:
-            pass
+            logger.warning("补齐任务来源字段失败", exc_info=True)
 
         env_engine = db.engines['envs']
-        try:
-            with env_engine.connect() as conn:
-                conn.execute(text('SELECT is_disabled FROM env LIMIT 1'))
-        except Exception:
-            try:
-                with env_engine.begin() as conn:
-                    conn.execute(text('ALTER TABLE env ADD COLUMN is_disabled INTEGER DEFAULT 0'))
-                    conn.execute(text('ALTER TABLE env ADD COLUMN updated_at VARCHAR(50) DEFAULT "-"'))
-                print("Successfully migrated envs.db with new columns.")
-            except Exception:
-                pass
+        _ensure_column(env_engine, 'env', 'is_disabled', 'is_disabled INTEGER DEFAULT 0')
+        _ensure_column(env_engine, 'env', 'updated_at', 'updated_at VARCHAR(50) DEFAULT "-"')
+        _ensure_column(env_engine, 'env', 'position', 'position INTEGER DEFAULT 0')
 
         try:
-            with env_engine.connect() as conn:
-                conn.execute(text('SELECT position FROM env LIMIT 1'))
+            with env_engine.begin() as conn:
+                conn.execute(text('UPDATE env SET position = id WHERE position = 0 OR position IS NULL'))
         except Exception:
-            try:
-                with env_engine.begin() as conn:
-                    conn.execute(text('ALTER TABLE env ADD COLUMN position INTEGER DEFAULT 0'))
-                    conn.execute(text('UPDATE env SET position = id'))
-                print("Successfully migrated envs.db with position column.")
-            except Exception:
-                pass
+            pass
 
         try:
             Task.query.filter(Task.status.in_(['Running', 'Queued'])).update({'status': 'Idle'})
             Dependency.query.filter(Dependency.status.in_(['Installing', 'Uninstalling'])).update({'status': 'Error'})
             Subscription.query.filter_by(status='Running').update({'status': 'Idle'})
             db.session.commit()
-        except:
-            pass
+        except Exception:
+            logger.warning("复位遗留状态失败", exc_info=True)
 
         try:
-            if not TaskView.query.filter_by(source_key='manual').first():
-                db.session.add(TaskView(
-                    name='单脚本',
-                    source_key='manual',
-                    source_type='manual',
-                    is_visible=0,
-                    is_system=1,
-                    sort_order=0
-                ))
-                db.session.commit()
-        except:
-            pass
+            ensure_task_view('单脚本', 'manual', 'manual', is_system=1, sort_order=0)
+        except Exception:
+            logger.warning("初始化单脚本视图失败", exc_info=True)
 
         try:
             sub_tasks = db.session.query(Task.source_key, Task.source_name, Task.source_type).filter(
@@ -340,8 +316,8 @@ def run_scheduler_forever(app):
                         exists.source_type = source_type or 'subscription'
                         changed = True
             db.session.commit()
-        except:
-            pass
+        except Exception:
+            logger.warning("从任务来源重建订阅视图失败", exc_info=True)
 
         ql_env_path = os.path.join(SCRIPTS_DIR, 'ql_env.js')
         with open(ql_env_path, 'w', encoding='utf-8') as f:
@@ -411,8 +387,8 @@ JSON.stringify = function(value, replacer, space) {
                 if tc_cfg and str(tc_cfg.value).isdigit():
                     from apscheduler.executors.pool import ThreadPoolExecutor
                     scheduler.configure(executors={'default': ThreadPoolExecutor(int(tc_cfg.value))})
-            except:
-                pass
+            except Exception:
+                logger.warning("调度器线程池配置失败，使用默认配置", exc_info=True)
 
             try:
                 tz_cfg = SystemConfig.query.filter_by(key='timezone').first()
@@ -422,18 +398,19 @@ JSON.stringify = function(value, replacer, space) {
                         time.tzset()
                     except AttributeError:
                         pass
-            except:
-                pass
+            except Exception:
+                logger.warning("时区配置应用失败", exc_info=True)
 
             scheduler.start()
             start_task_queue_worker(app)
 
             if not scheduler.get_job('sys_log_clean'):
                 tz_str = os.environ.get('TZ', 'Asia/Shanghai')
-                scheduler.add_job(auto_clean_logs, CronTrigger.from_crontab('0 2 * * *', timezone=tz_str), args=[app], id='sys_log_clean')
+                scheduler.add_job(auto_clean_logs, build_cron_trigger('0 2 * * *', timezone=tz_str), args=[app], id='sys_log_clean')
 
+            # [修复 P2-10] 自动导入由 10 秒降为 60 秒，降低大目录下的无效扫描开销
             if not scheduler.get_job('sys_auto_import_local_scripts'):
-                scheduler.add_job(auto_import_local_scripts, 'interval', seconds=10, args=[app], id='sys_auto_import_local_scripts', max_instances=1, coalesce=True)
+                scheduler.add_job(auto_import_local_scripts, 'interval', seconds=60, args=[app], id='sys_auto_import_local_scripts', max_instances=1, coalesce=True)
 
             try:
                 auto_import_local_scripts(app)
@@ -441,8 +418,8 @@ JSON.stringify = function(value, replacer, space) {
                     add_job_to_scheduler(app, task)
                 for sub in Subscription.query.all():
                     add_sub_job_to_scheduler(app, sub)
-            except:
-                pass
+            except Exception:
+                logger.warning("启动任务/订阅注册失败", exc_info=True)
 
             print("\n================ 调度器启动成功 ================")
             print(f"当前环境变量 TZ: {os.environ.get('TZ', '未设置')}")

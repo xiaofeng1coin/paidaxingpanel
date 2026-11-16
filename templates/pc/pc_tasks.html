@@ -128,11 +128,11 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
                                     <button class="action-more" data-bs-toggle="dropdown" data-bs-boundary="window">···</button>
                                     <ul class="dropdown-menu dropdown-menu-end dropdown-menu-action border-0">
                                         <li><a class="dropdown-item" href="javascript:void(0);" onclick='openEditModal({{ task.id }}, {{ task.name | tojson }}, {{ task.command | tojson }}, {{ task.cron | tojson }})'><i class="bi bi-pencil-square"></i> 编辑</a></li>
-                                        <li><a class="dropdown-item" href="/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}">
+                                        <li><a class="dropdown-item" href="javascript:void(0);" onclick="postAction('/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}')">
                                             <i class="bi bi-slash-circle"></i> {% if task.is_disabled == 1 %}启用{% else %}禁用{% endif %}
                                         </a></li>
                                         <li><hr class="dropdown-divider m-0 my-1"></li>
-                                        <li><a class="dropdown-item text-danger" href="/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}" onclick="return confirm('确定要删除该任务吗？')"><i class="bi bi-trash"></i> 删除</a></li>
+                                        <li><a class="dropdown-item text-danger" href="javascript:void(0);" onclick="postAction('/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}', '确定要删除该任务吗？')"><i class="bi bi-trash"></i> 删除</a></li>
                                     </ul>
                                 </div>
                             </div>
@@ -216,6 +216,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 <div class="modal fade" id="addTaskModal" tabindex="-1">
     <div class="modal-dialog">
         <form class="modal-content" method="POST" action="/task/add">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <input type="hidden" name="page" value="{{ pagination.page }}">
 <input type="hidden" name="per_page" value="{{ per_page }}">
 <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
@@ -237,6 +238,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 <div class="modal fade" id="editTaskModal" tabindex="-1">
     <div class="modal-dialog">
         <form class="modal-content" id="editTaskForm" method="POST">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <input type="hidden" name="page" value="{{ pagination.page }}">
 <input type="hidden" name="per_page" value="{{ per_page }}">
 <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
@@ -344,7 +346,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         const taskName = row ? row.getAttribute('data-task-name') : '任务';
         openLogModal(taskId, taskName);
         document.getElementById('modal-log-container').innerHTML = `## 开始执行... 准备下发指令\n\n`;
-        fetch(`/api/task/run/${taskId}`).then(res => res.json()).then(data => {
+        fetch(`/api/task/run/${taskId}`, { method: 'POST' }).then(res => res.json()).then(data => {
             if (data.status === 'success') {
                 const statusCol = document.getElementById(`status-col-${taskId}`);
                 const runBtnWrap = document.getElementById(`run-btn-wrap-${taskId}`);
@@ -376,7 +378,7 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
 
     function stopTask(taskId) {
         window.sysConfirm('确定中断/取消该任务吗？', () => {
-            fetch(`/api/task/stop/${taskId}`).then(res => res.json()).then(data => {
+            fetch(`/api/task/stop/${taskId}`, { method: 'POST' }).then(res => res.json()).then(data => {
                 if (data.status === 'success') {
                     const statusCol = document.getElementById(`status-col-${taskId}`);
                     const runBtnWrap = document.getElementById(`run-btn-wrap-${taskId}`);
@@ -446,12 +448,14 @@ html.dark-theme .task-filter-btn.active { background: #1E293B; color: #3B82F6; b
         document.getElementById('taskViewTip').style.display = 'none';
         fetch('/api/task_views').then(res => res.json()).then(data => {
             if (data.status !== 'success') return;
+            // [加固 P3-23] 名称等文本插入 innerHTML 前先做 HTML 转义
+            const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
             const tbody = document.getElementById('taskViewTableBody');
             tbody.innerHTML = '';
             data.data.forEach(item => {
                 tbody.innerHTML += `
                     <tr>
-                        <td class="text-center">${item.name}</td>
+                        <td class="text-center">${esc(item.name)}</td>
                         <td class="text-center">${item.source_type === 'manual' ? '单脚本' : '订阅'}</td>
                         <td class="text-center">
                             <div class="form-check form-switch d-flex justify-content-center">

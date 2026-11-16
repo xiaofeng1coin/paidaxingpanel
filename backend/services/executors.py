@@ -2,7 +2,7 @@ import os
 import time
 import re
 import ast
-import tempfile
+import logging
 import traceback
 import subprocess
 import threading
@@ -11,15 +11,30 @@ import shutil
 from datetime import datetime
 from backend.models import db, Task, Env, Dependency, SystemConfig, Subscription, TaskView
 from backend.extensions import socketio, scheduler
-from backend.runtime import running_processes, debug_processes, SUBPROCESS_KWARGS, queued_tasks, task_queue
+from backend.runtime import (
+    running_processes, debug_processes, SUBPROCESS_KWARGS, queued_tasks, task_queue,
+    last_auto_fixes, task_start_times
+)
 from backend.core.paths import SCRIPTS_DIR, LOGS_DIR, NODE_DIR, PYTHON_DIR, LINUX_DIR, CUSTOM_OVERRIDE_DIR
 from backend.core.security import get_safe_path
 from backend.core.env_manager import get_combined_env
-from backend.core.dependency_manager import run_dependency_install_sync, normalize_python_package_name
-from backend.core.task_helpers import parse_script_meta
+from backend.core.dependency_manager import (
+    run_dependency_install_sync, normalize_python_package_name,
+    get_dependency_log_path, uninstall_pip_target_package
+)
+from backend.core.proc_utils import kill_process_tree
+from backend.core.task_helpers import (
+    parse_script_meta, ensure_task_view, sanitize_task_name, sanitize_dep_log_name,
+    validate_alias, validate_package_name, sanitize_mirror_url
+)
+from backend.core.config_cache import get_all_configs
+
+logger = logging.getLogger('executors')
 
 _queue_lock = threading.Lock()
 _queue_worker_started = False
+_timeout_watcher_lock = threading.Lock()
+_timeout_watcher_started = False
 
 
 def emit_queue_status():
@@ -27,18 +42,23 @@ def emit_queue_status():
         socketio.emit('queue_status', {
             'queued_count': len(task_queue)
         })
-    except:
-        pass
+    except Exception:
+        logger.warning("队列状态推送失败", exc_info=True)
 
 
-def get_task_concurrency_limit():
+def get_task_concurrency_limit(app=None):
+    # [优化] 队列 worker 每秒轮询并发上限，改走 30s TTL 缓存，不再每秒直查数据库
     try:
-        cfg = SystemConfig.query.filter_by(key='task_concurrency').first()
-        if cfg and str(cfg.value).isdigit():
-            value = int(cfg.value)
+        if app is not None:
+            raw = (get_all_configs(app) or {}).get('task_concurrency')
+        else:
+            cfg = SystemConfig.query.filter_by(key='task_concurrency').first()
+            raw = cfg.value if cfg else None
+        if raw and str(raw).isdigit():
+            value = int(raw)
             return value if value > 0 else 5
-    except:
-        pass
+    except Exception:
+        logger.warning("并发上限配置读取失败，使用默认值 5", exc_info=True)
     return 5
 
 
@@ -54,7 +74,7 @@ def start_task_queue_worker(app):
 def enqueue_task_execution(app, task_id, ignore_disabled=False, trigger_source='schedule'):
     start_task_queue_worker(app)
     with app.app_context():
-        task = Task.query.get(task_id)
+        task = db.session.get(Task, task_id)
         if not task:
             return False, "任务不存在"
         if getattr(task, 'is_disabled', 0) == 1 and not ignore_disabled:
@@ -85,7 +105,7 @@ def task_queue_worker(app):
     while True:
         try:
             with app.app_context():
-                limit = get_task_concurrency_limit()
+                limit = get_task_concurrency_limit(app)
 
                 while len(running_processes) < limit and task_queue:
                     task_id = task_queue.pop(0)
@@ -94,7 +114,7 @@ def task_queue_worker(app):
                     if not queued_info:
                         continue
 
-                    task = Task.query.get(task_id)
+                    task = db.session.get(Task, task_id)
                     if not task:
                         continue
                     if getattr(task, 'is_disabled', 0) == 1 and not queued_info.get('ignore_disabled', False):
@@ -108,8 +128,9 @@ def task_queue_worker(app):
                         args=(app, task_id, queued_info.get('ignore_disabled', False), 0),
                         daemon=True
                     ).start()
-        except:
-            pass
+        except Exception:
+            # [修复 P2-1] 队列轮询异常不再静默吞掉，至少留下日志线索
+            logger.warning("任务队列轮询异常", exc_info=True)
 
         time.sleep(1)
 
@@ -237,8 +258,8 @@ def diagnose_task_issue(app, output_text, returncode, duration_seconds):
                     if e.name and 'github' in e.name.lower():
                         github_related = True
                         break
-            except:
-                pass
+            except Exception:
+                logger.warning("环境变量扫描失败", exc_info=True)
         if github_related:
             return {
                 'type': 'github_env_issue',
@@ -312,10 +333,48 @@ def write_diagnosis_message(write_log, diagnosis):
     write_log(msg)
 
 
+def start_timeout_watcher():
+    """[修复 P2-13] 启动共享超时扫描线程（全局仅一个，替代每任务一线程 sleep 的模式）。"""
+    global _timeout_watcher_started
+    with _timeout_watcher_lock:
+        if _timeout_watcher_started:
+            return
+        _timeout_watcher_started = True
+    threading.Thread(target=_timeout_watcher_loop, daemon=True).start()
+
+
+def _timeout_watcher_loop():
+    """共享超时扫描：每 5 秒检查已注册任务的执行时长，超时则强制终止进程树。"""
+    while True:
+        try:
+            now = time.time()
+            expired = [tid for tid, info in task_start_times.items() if now >= info.get('deadline', now + 1)]
+            for task_id in expired:
+                info = task_start_times.pop(task_id, None)
+                if not info:
+                    continue
+                process = info.get('process')
+                if process is not None and process.poll() is None:
+                    # [修复 P1-4] 用进程树终止替换单纯 kill，避免脚本子进程残留继续运行
+                    kill_process_tree(process)
+                    warn_msg = f"\n❌ 任务执行超过最大设定时长 ({info.get('max_hours')} 小时)，已被系统强制终止！\n"
+                    socketio.emit('log_stream', {'task_id': task_id, 'data': warn_msg})
+                    log_path = info.get('log_path')
+                    if log_path and os.path.exists(log_path):
+                        try:
+                            with open(log_path, 'a', encoding='utf-8') as lf:
+                                lf.write(warn_msg)
+                        except Exception:
+                            pass
+        except Exception:
+            logger.warning("任务超时扫描线程异常", exc_info=True)
+        time.sleep(5)
+
+
 def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
     with app.app_context():
         try:
-            task = Task.query.get(task_id)
+            task = db.session.get(Task, task_id)
             if not task: return
             if getattr(task, 'is_disabled', 0) == 1 and not ignore_disabled: return
 
@@ -326,18 +385,28 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
             timeout_str = run_env.get('TASK_TIMEOUT', '1')
             try:
                 max_timeout_hours = float(timeout_str)
-            except:
+            except (TypeError, ValueError):
+                max_timeout_hours = 1.0
+            # [修复 P1-3] TASK_TIMEOUT 为 0 或负数会让所有任务一启动就被强杀，强制钳制
+            if max_timeout_hours <= 0:
                 max_timeout_hours = 1.0
             max_timeout_seconds = int(max_timeout_hours * 3600)
 
             filename = task.command.strip()
+            # [修复 P0-1] 路径校验失败(返回 None)时，原实现反而放行原始输入，
+            # 导致 ../xxx 之类可以执行 scripts 目录之外的文件；此处改为直接拒绝执行。
             target_path = get_safe_path(SCRIPTS_DIR, filename)
             if not target_path:
-                safe_rel_path = filename
-            else:
-                safe_rel_path = target_path
+                reject_msg = f"\n❌ [安全拦截] 任务命令路径非法（禁止目录穿越/绝对路径/越出 scripts 目录）：{filename}\n"
+                task.status = 'Error'
+                db.session.commit()
+                socketio.emit('task_status', {'task_id': task.id, 'status': 'Error', 'duration': 'Rejected'})
+                socketio.emit('log_stream', {'task_id': task.id, 'data': reject_msg, 'clear': True})
+                return
+            safe_rel_path = os.path.relpath(target_path, SCRIPTS_DIR).replace('\\', '/')
 
-            task_log_dir = os.path.join(LOGS_DIR, task.name)
+            # [修复 P1-7] 任务名可能含路径分隔符导致日志写出到 LOGS_DIR 之外，统一净化
+            task_log_dir = os.path.join(LOGS_DIR, sanitize_task_name(task.name))
             os.makedirs(task_log_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_file_path = os.path.join(task_log_dir, f"{timestamp}.log")
@@ -378,20 +447,15 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
                                                stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
                                                encoding='utf-8', errors='replace', **SUBPROCESS_KWARGS)
                     running_processes[task_id] = process
+                    start_timeout_watcher()
 
-                    def timeout_monitor():
-                        time.sleep(max_timeout_seconds)
-                        if task_id in running_processes and running_processes[task_id] == process:
-                            if process.poll() is None:
-                                try:
-                                    process.kill()
-                                    warn_msg = f"\n❌ 任务执行超过最大设定时长 ({max_timeout_hours} 小时)，已被系统强制终止！\n"
-                                    socketio.emit('log_stream', {'task_id': task_id, 'data': warn_msg})
-                                    f.write(warn_msg)
-                                except:
-                                    pass
-
-                    threading.Thread(target=timeout_monitor, daemon=True).start()
+                    # [修复 P2-13] 超时监控统一注册，由共享扫描线程检查（原先每任务一线程 sleep）
+                    task_start_times[task_id] = {
+                        'process': process,
+                        'deadline': start_time + max_timeout_seconds,
+                        'log_path': log_file_path,
+                        'max_hours': max_timeout_hours
+                    }
 
                     log_buffer = []
                     last_emit_time = time.time()
@@ -416,6 +480,7 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
                         
                     process.wait()
                     running_processes.pop(task_id, None)
+                    task_start_times.pop(task_id, None)
                     returncode = process.returncode
                     
                 except Exception as proc_e:
@@ -430,9 +495,9 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
                 output_text = ''.join(full_output_parts)
 
                 diagnosis = diagnose_task_issue(app, output_text, returncode, duration)
-                last_fix_key = f"_last_fix_{task_id}"
                 current_fix_key = f"{diagnosis.get('pkg_type')}:{diagnosis.get('package')}" if diagnosis and diagnosis.get('package') else None
-                repeated_same_fix = getattr(execute_task, last_fix_key, None) == current_fix_key if current_fix_key else False
+                # [修复 P2-7] 修复去重标记改用模块级字典（原先挂在函数属性上，重启丢失且残留）
+                repeated_same_fix = last_auto_fixes.get(task_id) == current_fix_key if current_fix_key else False
                 if diagnosis:
                     if diagnosis.get('auto_fix') and retry_count < max_auto_retry and not repeated_same_fix:
                         write_log("\n================ 智能诊断开始 ================\n")
@@ -440,7 +505,7 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
                         write_log(f"📌 可能原因: {diagnosis.get('reason')}\n")
                         write_log(f"🛠️ 自动修复: 准备安装依赖 {diagnosis.get('package')}\n")
                         write_log("==============================================\n\n")
-                        setattr(execute_task, last_fix_key, current_fix_key)
+                        last_auto_fixes[task_id] = current_fix_key
                         install_ok, install_msg = run_dependency_install_sync(
                             app,
                             diagnosis.get('package'),
@@ -475,7 +540,7 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
                 f.write(end_msg)
                 socketio.emit('log_stream', {'task_id': task.id, 'data': end_msg})
 
-            current_task = Task.query.get(task_id)
+            current_task = db.session.get(Task, task_id)
             if current_task and current_task.status == 'Running':
                 current_task.status = 'Idle'
                 current_task.last_duration = f"{duration}s"
@@ -490,8 +555,9 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
         except Exception as e:
             err_trace = traceback.format_exc()
             running_processes.pop(task_id, None)
+            task_start_times.pop(task_id, None)
             socketio.emit('log_stream', {'task_id': task_id, 'data': f"\n❌ 错误终止:\n{err_trace}\n"})
-            current_task = Task.query.get(task_id)
+            current_task = db.session.get(Task, task_id)
             if current_task:
                 current_task.status = 'Error'
                 current_task.last_duration = "Failed"
@@ -504,14 +570,34 @@ def execute_task(app, task_id, ignore_disabled=False, retry_count=0):
 
 def execute_subscription(app, sub_id, ignore_disabled=False):
     with app.app_context():
+        stream_id = f"sub_{sub_id}"
         try:
-            sub = Subscription.query.get(sub_id)
+            sub = db.session.get(Subscription, sub_id)
             if not sub: return
             if getattr(sub, 'is_disabled', 0) == 1 and not ignore_disabled: return
 
+            # [修复 P1-7] 别名含路径符号会导致 git clone 目标逃逸 SCRIPTS_DIR，执行前严格校验
+            if not validate_alias(sub.alias or ''):
+                msg = "❌ 订阅别名包含非法字符（仅允许字母、数字、下划线、中划线），请编辑订阅后重试\n"
+                socketio.emit('log_stream', {'task_id': stream_id, 'data': msg, 'clear': True})
+                sub.status = 'Error'
+                db.session.commit()
+                socketio.emit('sub_status', {'sub_id': sub.id, 'status': 'Error'})
+                return
+
+            # [加固 P2-15] 订阅地址协议白名单：
+            # 单文件下载拒绝 file:// 等（防任意本地文件读取进 scripts）；git 仓库拒绝 ext:: 传输（防命令执行）与 file/ftp
+            sub_url = str(sub.url or '').strip()
+            sub_url_low = sub_url.lower()
+            if sub.type == 'single_file':
+                if not (sub_url_low.startswith('http://') or sub_url_low.startswith('https://')):
+                    raise Exception("订阅地址协议非法：单文件订阅仅允许 http/https 地址")
+            else:
+                if sub_url_low.startswith(('ext::', 'file:', 'ftp:')):
+                    raise Exception("订阅地址协议非法：仓库地址不允许使用 ext::/file/ftp 传输")
+
             start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            stream_id = f"sub_{sub.id}"
-            
+
             sub.status = 'Running'
             sub.last_run = start_time_str
             db.session.commit()
@@ -546,11 +632,17 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
                     ext = orig_name.split('.')[-1] if '.' in orig_name else 'js'
                     filename = f"{sub.alias}.{ext}"
                     filepath = os.path.join(target_dir, filename)
-                    
+
                     write_log(f"⬇️ 开始下载单文件: {orig_name} -> 统一保存为 {filename}\n")
                     req = urllib.request.Request(sub.url, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=30) as res, open(filepath, 'wb') as f:
-                        f.write(res.read())
+                    # [修复 P2-3] 下载加 50MB 上限，防止异常 URL 撑爆内存
+                    max_download_bytes = 50 * 1024 * 1024
+                    with urllib.request.urlopen(req, timeout=30) as res:
+                        data = res.read(max_download_bytes + 1)
+                    if len(data) > max_download_bytes:
+                        raise Exception("单文件下载超过 50MB 上限，已中止（如确需下载请改用仓库订阅）")
+                    with open(filepath, 'wb') as f:
+                        f.write(data)
                     write_log(f"✅ 下载完成\n")
                     files_to_process = [filename]
                     current_tasks = Task.query.filter(Task.command.like(f"single_scripts/{sub.alias}.%")).all()
@@ -566,8 +658,11 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
                     else:
                         write_log(f"📦 仓库已存在，开始拉取最新代码...\n")
                         cmd_fetch = ['git', 'fetch', '--all']
-                        subprocess.run(cmd_fetch, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
-                        
+                        fetch_result = subprocess.run(cmd_fetch, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
+                        # [修复 P2-4] fetch 失败时中止，避免后续 reset 到过期的 origin
+                        if fetch_result.returncode != 0:
+                            raise Exception(f"git fetch 失败（退出码 {fetch_result.returncode}）：{fetch_result.stdout[-500:] if fetch_result.stdout else ''}")
+
                         cmd_reset = ['git', 'reset', '--hard', f"origin/{sub.branch if sub.branch else 'HEAD'}"]
                         process = subprocess.Popen(cmd_reset, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=run_env, **SUBPROCESS_KWARGS)
 
@@ -582,7 +677,9 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
 
                     files_to_process = []
                     for root, dirs, files in os.walk(target_dir):
-                        if '.git' in root: continue
+                        # [加固 P3-24] 按路径分量判断，'my.github' 等合法目录不再被误跳过
+                        walk_parts = root.replace('\\', '/').split('/')
+                        if '.git' in walk_parts: continue
                         for f in files:
                             rel_path = os.path.relpath(os.path.join(root, f), target_dir).replace('\\', '/')
                             files_to_process.append(rel_path)
@@ -590,11 +687,22 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
                     current_tasks = Task.query.filter(Task.command.like(f"{sub.alias}/%")).all()
 
                 write_log(f"\n🔍 开始根据规则过滤文件...\n")
-                
-                ext_pattern = re.compile(rf"\.({sub.extensions})$") if sub.extensions else None
-                white_pattern = re.compile(sub.whitelist) if sub.whitelist else None
-                black_pattern = re.compile(sub.blacklist) if sub.blacklist else None
-                depend_pattern = re.compile(sub.depend_file) if sub.depend_file else None
+
+                # [修复 P2-2] 过滤规则直接 re.compile 会在写错正则时让整个订阅失败且无提示；
+                # 预校验并明确报出是哪一条规则非法。非法规则直接中止本次同步，
+                # 避免 matched_files 为空时 auto_del 把已有任务全部误删。
+                def _try_compile(rule_name, pattern):
+                    if not pattern:
+                        return None
+                    try:
+                        return re.compile(pattern)
+                    except re.error as e:
+                        raise Exception(f"过滤规则[{rule_name}]的正则表达式非法: {pattern} （{e}）")
+
+                ext_pattern = _try_compile('扩展名', rf"\.({sub.extensions})$") if sub.extensions else None
+                white_pattern = _try_compile('白名单', sub.whitelist) if sub.whitelist else None
+                black_pattern = _try_compile('黑名单', sub.blacklist) if sub.blacklist else None
+                depend_pattern = _try_compile('依赖文件', sub.depend_file) if sub.depend_file else None
 
                 matched_files = []
                 for f in files_to_process:
@@ -648,22 +756,12 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
                             add_job_to_scheduler(app, t)
                             write_log(f"🔄 更新任务: {script_name} ({command})\n")
 
+                        # [修复 P2-22] TaskView 创建/同步逻辑统一收敛到 ensure_task_view
+                        ensure_task_view(sub.name, sub.alias, 'subscription')
                         task_view = TaskView.query.filter_by(source_key=sub.alias).first()
-                        if not task_view:
-                            max_order = db.session.query(db.func.max(TaskView.sort_order)).scalar() or 0
-                            db.session.add(TaskView(
-                                name=sub.name,
-                                source_key=sub.alias,
-                                source_type='subscription',
-                                is_visible=0,
-                                is_system=0,
-                                sort_order=max_order + 1
-                            ))
+                        if task_view and task_view.name != sub.name:
+                            task_view.name = sub.name
                             db.session.commit()
-                        else:
-                            if task_view.name != sub.name:
-                                task_view.name = sub.name
-                                db.session.commit()
                     else:
                         if sub.auto_add == 1:
                             new_t = Task(
@@ -678,18 +776,7 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
                             db.session.add(new_t)
                             db.session.commit()
 
-                            task_view = TaskView.query.filter_by(source_key=sub.alias).first()
-                            if not task_view:
-                                max_order = db.session.query(db.func.max(TaskView.sort_order)).scalar() or 0
-                                db.session.add(TaskView(
-                                    name=sub.name,
-                                    source_key=sub.alias,
-                                    source_type='subscription',
-                                    is_visible=0,
-                                    is_system=0,
-                                    sort_order=max_order + 1
-                                ))
-                                db.session.commit()
+                            ensure_task_view(sub.name, sub.alias, 'subscription')
 
                             add_job_to_scheduler(app, new_t)
                             write_log(f"➕ 新增任务: {script_name} ({command})\n")
@@ -709,7 +796,7 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
                           f"==============================================\n"
                 write_log(end_msg)
 
-            current_sub = Subscription.query.get(sub_id)
+            current_sub = db.session.get(Subscription, sub_id)
             if current_sub and current_sub.status == 'Running':
                 current_sub.status = 'Idle'
                 db.session.commit()
@@ -717,7 +804,7 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
 
         except Exception as e:
             socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n❌ 错误: {str(e)}\n"})
-            current_sub = Subscription.query.get(sub_id)
+            current_sub = db.session.get(Subscription, sub_id)
             if current_sub:
                 current_sub.status = 'Error'
                 db.session.commit()
@@ -729,38 +816,74 @@ def execute_subscription(app, sub_id, ignore_disabled=False):
 def execute_dependency_cmd(app, dep_id, action):
     with app.app_context():
         try:
-            dep = Dependency.query.get(dep_id)
+            dep = db.session.get(Dependency, dep_id)
             if not dep: return
+
+            # [修复 P1-1] pip --target 安装的包，pip uninstall 不作用于目标目录、文件全部残留；
+            # 卸载改为直接解析 dist-info/RECORD 删除 PYTHON_DIR 中的包文件。
+            if dep.pkg_type == 'pip' and action == 'uninstall':
+                log_file_path = get_dependency_log_path(dep.id, dep.name)
+                stream_id = f"dep_{dep.id}"
+                socketio.emit('log_stream', {'task_id': stream_id, 'data': "🚀 开始卸载 pip 依赖 | 直接移除依赖目录中的包文件\n", 'clear': True})
+                removed = uninstall_pip_target_package(dep.name)
+                with open(log_file_path, 'w', encoding='utf-8') as f:
+                    if removed:
+                        msg = f"✅ 依赖 [{dep.name}] 已从依赖目录移除（清理 {removed} 个条目）\n"
+                    else:
+                        msg = "⚠️ 未在依赖目录中找到该包的安装文件（可能未安装成功或已被手动删除）\n"
+                    f.write(msg)
+                socketio.emit('log_stream', {'task_id': stream_id, 'data': msg})
+                db.session.delete(dep)
+                db.session.commit()
+                socketio.emit('dep_status', {'id': dep.id, 'status': 'Deleted'})
+                return
 
             node_mirror = SystemConfig.query.filter_by(key='node_mirror').first()
             python_mirror = SystemConfig.query.filter_by(key='python_mirror').first()
             linux_mirror = SystemConfig.query.filter_by(key='linux_mirror').first()
 
-            dep_log_dir = os.path.join(LOGS_DIR, 'dependencies')
-            os.makedirs(dep_log_dir, exist_ok=True)
-            log_file_path = os.path.join(dep_log_dir, f"dep_{dep.id}_{dep.name}.log")
+            # [修复 P1-2] 依赖日志文件名统一走 sanitize（scoped npm 包名含 / 会导致写入失败）
+            log_file_path = get_dependency_log_path(dep.id, dep.name)
             stream_id = f"dep_{dep.id}"
 
             run_cwd = SCRIPTS_DIR
+            # [加固 P3-22] 依赖名统一校验（拒绝 '-' 开头参数注入）
+            if not validate_package_name(dep.name, dep.pkg_type):
+                socketio.emit('log_stream', {'task_id': stream_id, 'data': "❌ 依赖名非法，已拒绝执行\n"})
+                logger.warning("依赖名非法已拒绝执行: %s (%s)", dep.name, dep.pkg_type)
+                return
+
+            # [加固 P2-16] npm/pip 命令改为 shell=False 参数列表（路径含空格也安全），
+            # 镜像源仅接受合法 http(s) 地址，防止配置被篡改后注入命令
+            cmd_list = None
             if dep.pkg_type == 'npm':
                 run_cwd = NODE_DIR
-                cmd = f"npm {action} {dep.name}"
+                cmd_list = ['npm', action, dep.name]
                 if action == 'install' and node_mirror and node_mirror.value:
-                    cmd += f" --registry={node_mirror.value}"
+                    mirror = sanitize_mirror_url(node_mirror.value)
+                    if mirror:
+                        cmd_list += ['--registry', mirror]
             elif dep.pkg_type == 'pip':
                 run_cwd = PYTHON_DIR
-                if action == 'install':
-                    cmd = f"pip install --target={PYTHON_DIR} {dep.name}"
-                    if python_mirror and python_mirror.value: cmd += f" -i {python_mirror.value}"
-                else:
-                    cmd = f"pip uninstall -y {dep.name}"
+                cmd_list = ['pip', 'install', '--target', PYTHON_DIR, dep.name]
+                if python_mirror and python_mirror.value:
+                    mirror = sanitize_mirror_url(python_mirror.value)
+                    if mirror:
+                        cmd_list += ['-i', mirror]
             else:
                 run_cwd = LINUX_DIR
                 cmd = ""
                 if action == 'install' and linux_mirror and linux_mirror.value:
+                    # apt 分支保持 shell 串联（sed && apt-get），host 仅允许域名字符
                     host = linux_mirror.value.replace('https://', '').replace('http://', '').strip('/')
-                    cmd += f"sed -i 's/archive.ubuntu.com/{host}/g' /etc/apt/sources.list && apt-get update && "
+                    if not re.match(r'^[A-Za-z0-9\.\-]+$', host):
+                        socketio.emit('log_stream', {'task_id': stream_id, 'data': "❌ 镜像源地址非法，已忽略该配置\n"})
+                        host = ''
+                    if host:
+                        cmd += f"sed -i 's/archive.ubuntu.com/{host}/g' /etc/apt/sources.list && apt-get update && "
                 cmd += f"apt-get {'remove' if action == 'uninstall' else 'install'} -y {dep.name}"
+
+            cmd = ' '.join(cmd_list) if cmd_list is not None else cmd
 
             start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             start_msg = f"==============================================\n" \
@@ -771,14 +894,17 @@ def execute_dependency_cmd(app, dep_id, action):
             socketio.emit('log_stream', {'task_id': stream_id, 'data': start_msg, 'clear': True})
             with open(log_file_path, 'w', encoding='utf-8') as f:
                 f.write(start_msg)
-                
-                process = subprocess.Popen(cmd, shell=True, env=get_combined_env(app), stdout=subprocess.PIPE,
+
+                # [加固 P2-16] npm/pip 已是无 shell 的参数列表；apt 分支（含内部拼接校验）仍走 shell
+                popen_cmd = cmd_list if cmd_list is not None else cmd
+                popen_shell = cmd_list is None
+                process = subprocess.Popen(popen_cmd, shell=popen_shell, env=get_combined_env(app), stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, cwd=run_cwd, text=True, bufsize=1,
                                            encoding='utf-8', errors='replace', **SUBPROCESS_KWARGS)
                 for line in process.stdout:
                     f.write(line)
-                    f.flush()               
-                    os.fsync(f.fileno())    
+                    f.flush()
+                    # [优化] 移除逐行 os.fsync（每行强制刷盘拖慢安装输出），flush 足够
                     socketio.emit('log_stream', {'task_id': stream_id, 'data': line})
                 process.wait()
                 
@@ -791,7 +917,7 @@ def execute_dependency_cmd(app, dep_id, action):
                 f.write(end_msg)
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': end_msg})
 
-            current_dep = Dependency.query.get(dep_id)
+            current_dep = db.session.get(Dependency, dep_id)
             if current_dep:
                 if action == 'install':
                     current_dep.status = 'Installed' if process.returncode == 0 else 'Error'
@@ -802,7 +928,16 @@ def execute_dependency_cmd(app, dep_id, action):
                     db.session.commit()
                     socketio.emit('dep_status', {'id': current_dep.id, 'status': 'Deleted'})
         except Exception as e:
-            pass
+            # [修复 P2-1] 依赖执行异常原先被完全吞掉，状态会一直卡在 Installing/Uninstalling
+            logger.error("依赖命令执行异常: id=%s action=%s (%s)", dep_id, action, e, exc_info=True)
+            try:
+                stuck = db.session.get(Dependency, dep_id)
+                if stuck and stuck.status in ('Installing', 'Uninstalling'):
+                    stuck.status = 'Error'
+                    db.session.commit()
+                    socketio.emit('dep_status', {'id': stuck.id, 'status': 'Error'})
+            except Exception:
+                db.session.rollback()
         finally:
             db.session.remove()
 
@@ -812,9 +947,18 @@ def execute_debug(app, filename, stream_id):
         try:
             target_path = get_safe_path(SCRIPTS_DIR, filename)
             if not target_path: raise Exception("非法路径")
-            
+
             run_env = get_combined_env(app)
-            
+
+            # [加固 P3-20] 调试进程纳入统一超时监控（沿用全局 TASK_TIMEOUT 配置）
+            timeout_str = run_env.get('TASK_TIMEOUT', '1')
+            try:
+                max_timeout_hours = float(timeout_str)
+            except (TypeError, ValueError):
+                max_timeout_hours = 1.0
+            if max_timeout_hours <= 0:
+                max_timeout_hours = 1.0
+
             cmd_list = ['node', '--require', './ql_env.js', target_path] if target_path.endswith('.js') else \
                 ['python', target_path] if target_path.endswith('.py') else \
                 ['bash', target_path] if target_path.endswith('.sh') else [target_path]
@@ -826,13 +970,22 @@ def execute_debug(app, filename, stream_id):
                                        stderr=subprocess.STDOUT, cwd=SCRIPTS_DIR, text=True, bufsize=1,
                                        encoding='utf-8', errors='replace', **SUBPROCESS_KWARGS)
             debug_processes[stream_id] = process
-            
+            start_timeout_watcher()
+            task_start_times[stream_id] = {
+                'process': process,
+                'deadline': time.time() + int(max_timeout_hours * 3600),
+                'log_path': None,
+                'max_hours': max_timeout_hours
+            }
+
             for line in process.stdout:
                 socketio.emit('log_stream', {'task_id': stream_id, 'data': line})
             process.wait()
             debug_processes.pop(stream_id, None)
+            task_start_times.pop(stream_id, None)
             socketio.emit('log_stream',
                           {'task_id': stream_id, 'data': f"\n✅ 调试执行结束，退出码: {process.returncode}\n"})
         except Exception as e:
             debug_processes.pop(stream_id, None)
+            task_start_times.pop(stream_id, None)
             socketio.emit('log_stream', {'task_id': stream_id, 'data': f"\n❌ 调试出错: {str(e)}\n"})

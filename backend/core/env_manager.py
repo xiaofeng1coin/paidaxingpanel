@@ -5,8 +5,11 @@ from backend.core.paths import NODE_DIR, PYTHON_DIR, CONFIG_FILE
 
 def get_combined_env(app):
     run_env = os.environ.copy()
-    
-    keys_to_remove = [k for k in list(run_env.keys()) if 'GITHUB' in k.upper() or (isinstance(run_env[k], str) and 'GITHUB' in run_env[k].upper())]
+
+    # [修复 P2-16] 只按"变量名"过滤 GITHUB 相关变量。
+    # 旧实现连"变量值"里含 GITHUB 字样的变量也一并删除，导致值为 github.com 的正常变量被误删；
+    # 脚本层对 process.env 的防盗链拦截已由 ql_env.js 的 JSON.stringify 兜底，无需在此删除值。
+    keys_to_remove = [k for k in list(run_env.keys()) if 'GITHUB' in k.upper()]
     for k in keys_to_remove:
         run_env.pop(k, None)
         

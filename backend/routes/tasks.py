@@ -1,12 +1,15 @@
 import os
 import threading
 from datetime import datetime
-from flask import request, redirect, url_for, jsonify
+from flask import request, redirect, url_for, jsonify, flash
 from flask_login import login_required
 from sqlalchemy import case
-from apscheduler.triggers.cron import CronTrigger
+from backend.core.cron_utils import build_cron_trigger
 from backend.models import db, Task, TaskView
 from backend.core.template import render_template
+from backend.core.proc_utils import kill_process_tree
+from backend.core.file_utils import read_text_tail
+from backend.core.task_helpers import sanitize_task_name, compute_next_run
 from backend.extensions import scheduler, socketio
 from backend.runtime import running_processes, queued_tasks, task_queue
 from backend.services.executors import execute_task, enqueue_task_execution, emit_queue_status
@@ -70,16 +73,8 @@ def init_app(app, add_job_to_scheduler):
             if getattr(task, 'is_disabled', 0) == 1:
                 task.next_run = "已禁用"
             else:
-                try:
-                    trigger = CronTrigger.from_crontab(task.cron, timezone=tz_str)
-                    now = datetime.now(trigger.timezone)
-                    next_time = trigger.get_next_fire_time(None, now)
-                    if next_time:
-                        task.next_run = next_time.strftime("%Y-%m-%d %H:%M:%S")
-                    else:
-                        task.next_run = "无法计算"
-                except Exception:
-                    task.next_run = "规则错误"
+                # [修复 P2-11] next_run 带缓存计算，避免任务多时每行现算 CronTrigger
+                task.next_run = compute_next_run(task.id, task.cron, tz_str, build_cron_trigger)
 
         return render_template('tasks.html', pagination=pagination, status_filter=status_filter, source_filter=source_filter, per_page=per_page, source_views=source_views, all_views=all_views, queued_count=len(task_queue), keyword=keyword)
 
@@ -105,7 +100,7 @@ def init_app(app, add_job_to_scheduler):
     @app.route('/api/task_views/toggle/<int:id>', methods=['POST'])
     @login_required
     def api_task_views_toggle(id):
-        view = TaskView.query.get(id)
+        view = db.session.get(TaskView, id)
         if not view:
             return jsonify({"status": "error", "msg": "视图不存在"})
 
@@ -116,44 +111,57 @@ def init_app(app, add_job_to_scheduler):
     @app.route('/task/add', methods=['POST'])
     @login_required
     def add_task():
-        new_task = Task(name=request.form.get('name'), command=request.form.get('command').strip(),
+        # [修复 B-1] 配套 APP 客户端分支：带 X-Requested-With 标识头时返回结构化 JSON，
+        # 避免"校验失败也 302 被 APP 误判为成功"的问题
+        is_app = request.headers.get('X-Requested-With') == 'FlutterPanelApp'
+
+        def _app_error(msg):
+            return jsonify({"status": "error", "msg": msg})
+
+        # [修复 P1-7] 任务名净化（防日志目录写穿）+ 命令非空校验
+        command = (request.form.get('command') or '').strip()
+        if not command:
+            if is_app: return _app_error('执行命令不能为空')
+            flash('执行命令不能为空')
+            return build_tasks_redirect()
+        new_task = Task(name=sanitize_task_name(request.form.get('name'), '未命名任务'), command=command,
                     cron=request.form.get('cron'), status='Idle',
                     source_type='manual', source_key='manual', source_name='单脚本')
         db.session.add(new_task);
         db.session.commit();
 
-        if not TaskView.query.filter_by(source_key='manual').first():
-            db.session.add(TaskView(
-                name='单脚本',
-                source_key='manual',
-                source_type='manual',
-                is_visible=0,
-                is_system=1,
-                sort_order=0
-            ))
-            db.session.commit()
+        from backend.core.task_helpers import ensure_task_view
+        ensure_task_view('单脚本', 'manual', 'manual', is_system=1, sort_order=0)
 
         add_job_to_scheduler(new_task)
+        if is_app: return jsonify({"status": "success"})
         return build_tasks_redirect()
 
 
     @app.route('/task/edit/<int:id>', methods=['POST'])
     @login_required
     def edit_task(id):
-        task = Task.query.get(id)
+        is_app = request.headers.get('X-Requested-With') == 'FlutterPanelApp'
+        task = db.session.get(Task, id)
         if task:
-            task.name = request.form.get('name')
-            task.command = request.form.get('command').strip()
+            command = (request.form.get('command') or '').strip()
+            if not command:
+                if is_app: return jsonify({"status": "error", "msg": "执行命令不能为空"})
+                flash('执行命令不能为空')
+                return build_tasks_redirect()
+            task.name = sanitize_task_name(request.form.get('name'), task.name)
+            task.command = command
             task.cron = request.form.get('cron')
             db.session.commit()
             add_job_to_scheduler(task)
+        if is_app: return jsonify({"status": "success"})
         return build_tasks_redirect()
 
 
-    @app.route('/api/task/toggle/<int:id>')
+    @app.route('/api/task/toggle/<int:id>', methods=['POST'])
     @login_required
     def toggle_task(id):
-        task = Task.query.get(id)
+        task = db.session.get(Task, id)
         if task:
             task.is_disabled = 1 if getattr(task, 'is_disabled', 0) == 0 else 0
             db.session.commit()
@@ -164,21 +172,19 @@ def init_app(app, add_job_to_scheduler):
         return build_tasks_redirect()
 
 
-    @app.route('/task/delete/<int:id>')
+    @app.route('/task/delete/<int:id>', methods=['POST'])
     @login_required
     def delete_task(id):
-        task = Task.query.get(id)
+        task = db.session.get(Task, id)
         if task:
             if id in running_processes:
-                try:
-                    running_processes[id].kill()
-                except:
-                    pass
+                # [修复 P1-4] 终止整棵进程树，避免子进程残留
+                kill_process_tree(running_processes.pop(id, None))
             queued_tasks.pop(id, None)
             if id in task_queue:
                 try:
                     task_queue.remove(id)
-                except:
+                except ValueError:
                     pass
             emit_queue_status()
             if scheduler.get_job(f"task_{task.id}"): scheduler.remove_job(f"task_{task.id}")
@@ -195,47 +201,45 @@ def init_app(app, add_job_to_scheduler):
         ids = data.get('ids', [])
         if not ids:
             return jsonify({"status": "error"})
-        
+
         for task_id in ids:
-            task = Task.query.get(task_id)
+            task = db.session.get(Task, task_id)
             if not task:
                 continue
-            
+
             if action == 'enable':
                 task.is_disabled = 0
                 add_job_to_scheduler(task)
             elif action == 'disable':
                 task.is_disabled = 1
-                if scheduler.get_job(f"task_{task.id}"): 
+                if scheduler.get_job(f"task_{task.id}"):
                     scheduler.remove_job(f"task_{task.id}")
             elif action == 'run':
                 if task_id not in running_processes and task_id not in queued_tasks:
                     enqueue_task_execution(app, task_id, True, 'manual')
             elif action == 'delete':
                 if task_id in running_processes:
-                    try:
-                        running_processes[task_id].kill()
-                    except:
-                        pass
+                    # [修复 P1-4] 终止整棵进程树
+                    kill_process_tree(running_processes.pop(task_id, None))
                 queued_tasks.pop(task_id, None)
                 if task_id in task_queue:
                     try:
                         task_queue.remove(task_id)
-                    except:
+                    except ValueError:
                         pass
                 emit_queue_status()
-                if scheduler.get_job(f"task_{task.id}"): 
+                if scheduler.get_job(f"task_{task.id}"):
                     scheduler.remove_job(f"task_{task.id}")
                 db.session.delete(task)
-                
+
         db.session.commit()
         return jsonify({"status": "success"})
 
 
-    @app.route('/api/task/run/<int:id>')
+    @app.route('/api/task/run/<int:id>', methods=['POST'])
     @login_required
     def api_run_task(id):
-        task = Task.query.get(id)
+        task = db.session.get(Task, id)
         if not task: return jsonify({"status": "error", "msg": "任务不存在"})
         if id in running_processes or task.status == 'Running':
             return jsonify({"status": "error", "msg": "运行中"})
@@ -251,26 +255,22 @@ def init_app(app, add_job_to_scheduler):
         return jsonify({"status": "success"})
 
 
-    @app.route('/api/task/stop/<int:id>')
+    @app.route('/api/task/stop/<int:id>', methods=['POST'])
     @login_required
     def api_stop_task(id):
-        task = Task.query.get(id)
+        task = db.session.get(Task, id)
         if not task: return jsonify({"status": "error"})
         queued_tasks.pop(id, None)
         if id in task_queue:
             try:
                 task_queue.remove(id)
-            except:
+            except ValueError:
                 pass
         emit_queue_status()
         if id in running_processes:
-            try:
-                running_processes[id].kill()
-            except:
-                pass
-            finally:
-                running_processes.pop(id, None)
-                socketio.emit('log_stream', {'task_id': id, 'data': f"\n🛑 手动停止\n"})
+            # [修复 P1-4] 终止整棵进程树
+            kill_process_tree(running_processes.pop(id, None))
+            socketio.emit('log_stream', {'task_id': id, 'data': f"\n🛑 手动停止\n"})
         task.status = 'Idle';
         db.session.commit();
         socketio.emit('task_status', {'task_id': id, 'status': 'Idle', 'duration': 'Stopped'})
@@ -282,13 +282,15 @@ def init_app(app, add_job_to_scheduler):
     def api_get_task_log(id):
         from backend.core.paths import LOGS_DIR
         from backend.core.security import get_safe_path
-        task = Task.query.get(id)
+        task = db.session.get(Task, id)
         if not task: return jsonify({"content": "不存在"})
-        
-        task_log_dir = get_safe_path(LOGS_DIR, task.name)
+
+        task_log_dir = get_safe_path(LOGS_DIR, sanitize_task_name(task.name))
         if task_log_dir and os.path.exists(task_log_dir):
-            files = sorted(os.listdir(task_log_dir), reverse=True)
-            if files:
-                with open(os.path.join(task_log_dir, files[0]), 'r', encoding='utf-8') as f: 
-                    return jsonify({"content": f.read()})
+            # [修复 P2-5] 只取 .log 文件并按修改时间取最新，避免目录混入其它文件时取错
+            log_files = [f for f in os.listdir(task_log_dir) if f.endswith('.log')]
+            if log_files:
+                latest = max(log_files, key=lambda f: os.path.getmtime(os.path.join(task_log_dir, f)))
+                # [修复 P2-5] 日志过大时只返回末尾内容，避免接口与页面被拖垮
+                return jsonify({"content": read_text_tail(os.path.join(task_log_dir, latest))})
         return jsonify({"content": "暂无日志..."})

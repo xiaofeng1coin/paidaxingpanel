@@ -3,12 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>初始化配置 - 派大星面板</title>
     <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/pc/pc_install.css') }}" rel="stylesheet">
+    <script>
+        // [加固 P3-18] 安装接口已纳入 CSRF 保护：全局为写请求附加 X-CSRFToken 头
+        (function() {
+            const _origFetch = window.fetch;
+            window.fetch = function(input, init) {
+                init = init || {};
+                try {
+                    const method = String(init.method || (input instanceof Request ? input.method : 'GET') || 'GET').toUpperCase();
+                    if (method !== 'GET' && method !== 'HEAD') {
+                        const headers = new Headers(init.headers || {});
+                        if (!headers.has('X-CSRFToken')) {
+                            const meta = document.querySelector('meta[name="csrf-token"]');
+                            if (meta) headers.set('X-CSRFToken', meta.content);
+                        }
+                        init.headers = headers;
+                    }
+                } catch (e) { /* 保持原生行为 */ }
+                return _origFetch.call(this, input, init);
+            };
+        })();
+    </script>
 </head>
-<body oncontextmenu="return false;" onkeydown="if(event.keyCode==123 || (event.ctrlKey&&event.shiftKey&&(event.keyCode==73||event.keyCode==74)) || (event.ctrlKey&&event.keyCode==85)){return false;}">
+<body>
 
     <div class="logo-container">
         <div class="logo-icon"><i class="bi bi-star-fill"></i></div>

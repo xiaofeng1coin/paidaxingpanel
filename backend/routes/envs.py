@@ -3,16 +3,29 @@ from flask import request, redirect, url_for, flash, jsonify
 from flask_login import login_required
 from backend.models import db, Env
 from backend.core.template import render_template
+from backend.core.task_helpers import validate_env_name
 
 def init_app(app):
     @app.route('/envs', methods=['GET', 'POST'])
     @login_required
     def envs():
+        # [修复 B-1] 配套 APP 客户端分支：带 X-Requested-With 标识头时返回结构化 JSON
+        is_app = request.headers.get('X-Requested-With') == 'FlutterPanelApp'
+
         if request.method == 'POST':
             env_name = request.form.get('name', '').strip()
 
+            # [修复 P1-7] 变量名必须符合 shell 规范，防止破坏子进程环境块
+            if not validate_env_name(env_name):
+                msg = f"添加失败：变量名 '{env_name}' 非法！只允许字母、数字、下划线，且不能以数字开头。"
+                if is_app: return jsonify({"status": "error", "msg": msg})
+                flash(msg)
+                return redirect(url_for('envs'))
+
             if Env.query.filter_by(name=env_name).first():
-                flash(f"添加失败：环境变量 '{env_name}' 已存在，名称必须唯一！")
+                msg = f"添加失败：环境变量 '{env_name}' 已存在，名称必须唯一！"
+                if is_app: return jsonify({"status": "error", "msg": msg})
+                flash(msg)
                 return redirect(url_for('envs'))
 
             now_str = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
@@ -25,6 +38,7 @@ def init_app(app):
                     position=max_pos + 1)
             )
             db.session.commit()
+            if is_app: return jsonify({"status": "success"})
             return redirect(url_for('envs'))
 
         page = request.args.get('page', 1, type=int)
@@ -39,7 +53,7 @@ def init_app(app):
             )
 
         pagination = query.order_by(Env.position.asc(), Env.id.asc()).paginate(page=page, per_page=per_page, error_out=False)
-        
+
         return render_template('envs.html', pagination=pagination, per_page=per_page, keyword=keyword)
 
 
@@ -50,7 +64,7 @@ def init_app(app):
         if data and 'order' in data:
             order_list = data['order']
             for index, env_id in enumerate(order_list):
-                env = Env.query.get(int(env_id))
+                env = db.session.get(Env, int(env_id))
                 if env:
                     env.position = index
             db.session.commit()
@@ -60,13 +74,22 @@ def init_app(app):
     @app.route('/env/edit/<int:id>', methods=['POST'])
     @login_required
     def edit_env(id):
-        env = Env.query.get(id)
+        is_app = request.headers.get('X-Requested-With') == 'FlutterPanelApp'
+        env = db.session.get(Env, id)
         if env:
             new_name = request.form.get('name', '').strip()
 
+            if not validate_env_name(new_name):
+                msg = f"修改失败：变量名 '{new_name}' 非法！只允许字母、数字、下划线，且不能以数字开头。"
+                if is_app: return jsonify({"status": "error", "msg": msg})
+                flash(msg)
+                return redirect(url_for('envs'))
+
             existing_env = Env.query.filter_by(name=new_name).first()
             if existing_env and existing_env.id != id:
-                flash(f"修改失败：环境变量 '{new_name}' 已被其他项目使用！")
+                msg = f"修改失败：环境变量 '{new_name}' 已被其他项目使用！"
+                if is_app: return jsonify({"status": "error", "msg": msg})
+                flash(msg)
                 return redirect(url_for('envs'))
 
             env.name = new_name
@@ -74,13 +97,14 @@ def init_app(app):
             env.remarks = request.form.get('remarks')
             env.updated_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
             db.session.commit()
+        if is_app: return jsonify({"status": "success"})
         return redirect(url_for('envs'))
 
 
-    @app.route('/api/env/toggle/<int:id>')
+    @app.route('/api/env/toggle/<int:id>', methods=['POST'])
     @login_required
     def toggle_env(id):
-        env = Env.query.get(id)
+        env = db.session.get(Env, id)
         if env:
             env.is_disabled = 1 if getattr(env, 'is_disabled', 0) == 0 else 0
             env.updated_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
@@ -88,9 +112,9 @@ def init_app(app):
         return redirect(url_for('envs'))
 
 
-    @app.route('/env/delete/<int:id>')
+    @app.route('/env/delete/<int:id>', methods=['POST'])
     @login_required
     def delete_env(id):
-        env = Env.query.get(id)
+        env = db.session.get(Env, id)
         if env: db.session.delete(env); db.session.commit()
         return redirect(url_for('envs'))

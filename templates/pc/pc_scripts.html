@@ -122,6 +122,7 @@ html.dark-theme .btn-script-upload:hover {
             <div class="card-body p-0 position-relative flex-grow-1" style="min-height: 500px; overflow: hidden; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;">
                 <div id="monaco-editor" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0;"></div>
                 <form id="saveForm" method="POST" style="display:none;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="filename" value="{{ current_file }}">
                     <textarea name="content" id="hiddenContent"></textarea>
                 </form>

@@ -12,6 +12,7 @@
 
 {% block content %}
 <form method="POST" action="/config" class="config-wrapper" id="configForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <textarea name="config_content" class="config-textarea" spellcheck="false" placeholder="# 输入您的全局配置...">{{ config_content }}</textarea>
 </form>
 <button class="fab-save" onclick="document.getElementById('configForm').submit()"><i class="bi bi-floppy-fill"></i> 保存</button>

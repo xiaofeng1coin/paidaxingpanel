@@ -1,10 +1,22 @@
 import os
+import logging
 import subprocess
 import threading
 from backend.models import SystemConfig
 from backend.core.env_manager import get_combined_env
-from backend.core.paths import SCRIPTS_DIR
+from backend.core.paths import SCRIPTS_DIR, NODE_DIR
 from backend.runtime import SUBPROCESS_KWARGS
+
+logger = logging.getLogger('notify')
+
+
+def _resolve_node_executable():
+    """[修复 P2-17] 系统通知优先使用面板依赖环境中的 node，无则回退 PATH。"""
+    node_candidate = os.path.join(NODE_DIR, 'node.exe' if os.name == 'nt' else 'node')
+    if os.path.exists(node_candidate):
+        return node_candidate
+    return 'node'
+
 
 def send_sys_notify(app, title, content):
     def _send():
@@ -40,8 +52,9 @@ def send_sys_notify(app, title, content):
             sys_notify_js = os.path.join(SCRIPTS_DIR, 'sys_notify.js')
             if os.path.exists(sys_notify_js):
                 try:
-                    subprocess.run(['node', 'sys_notify.js', title, content], env=env, cwd=SCRIPTS_DIR, timeout=30, **SUBPROCESS_KWARGS)
+                    subprocess.run([_resolve_node_executable(), 'sys_notify.js', title, content], env=env, cwd=SCRIPTS_DIR, timeout=30, **SUBPROCESS_KWARGS)
                 except Exception as e:
-                    pass
+                    # [修复 P2-1] 通知失败不再静默吞掉，至少留下日志线索
+                    logger.warning("系统通知发送失败: %s", e)
 
     threading.Thread(target=_send, daemon=True).start()

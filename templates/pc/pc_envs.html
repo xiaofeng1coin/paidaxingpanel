@@ -58,8 +58,8 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
                         <td>
                             <div class="d-flex align-items-center justify-content-center gap-2">
                                 <button class="action-icon-btn" data-bs-toggle="tooltip" title="编辑" onclick='openEditEnvModal({{ env.id }}, {{ env.name | tojson }}, {{ env.value | tojson }}, {{ env.remarks | tojson }})'><i class="bi bi-pencil"></i></button>
-                                <a href="/api/env/toggle/{{ env.id }}" class="action-icon-btn" data-bs-toggle="tooltip" title="{% if env.is_disabled == 1 %}启用{% else %}禁用{% endif %}"><i class="bi bi-slash-circle"></i></a>
-                                <a href="/env/delete/{{ env.id }}" class="action-icon-btn text-danger-hover" data-bs-toggle="tooltip" title="删除" onclick="return confirm('确定删除吗？')"><i class="bi bi-trash"></i></a>
+                                <a href="javascript:void(0);" onclick="postAction('/api/env/toggle/{{ env.id }}')" class="action-icon-btn" data-bs-toggle="tooltip" title="{% if env.is_disabled == 1 %}启用{% else %}禁用{% endif %}"><i class="bi bi-slash-circle"></i></a>
+                                <a href="javascript:void(0);" onclick="postAction('/env/delete/{{ env.id }}', '确定删除该环境变量吗？')" class="action-icon-btn text-danger-hover" data-bs-toggle="tooltip" title="删除"><i class="bi bi-trash"></i></a>
                             </div>
                         </td>
                     </tr>
@@ -110,6 +110,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 <!-- 新建变量 Modal -->
 <div class="modal fade" id="addEnvModal" tabindex="-1">
     <div class="modal-dialog"><form class="modal-content" method="POST" action="/envs">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">新建环境变量</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body p-4">
             <div class="mb-3"><label class="form-label text-muted small fw-medium">变量名称</label><input type="text" name="name" class="form-control font-monospace" required></div>
@@ -123,6 +124,7 @@ html.dark-theme .page-item.disabled .page-link { background-color: #1E293B; colo
 <!-- 编辑变量 Modal -->
 <div class="modal fade" id="editEnvModal" tabindex="-1">
     <div class="modal-dialog"><form class="modal-content" id="editEnvForm" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="modal-header border-bottom"><h6 class="modal-title fw-bold">编辑环境变量</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body p-4">
             <div class="mb-3"><label class="form-label text-muted small fw-medium">变量名称</label><input type="text" id="edit_env_name" name="name" class="form-control font-monospace" required></div>

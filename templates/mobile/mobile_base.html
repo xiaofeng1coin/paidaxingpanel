@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>派大星面板</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='images/default_star.svg') }}">
     <link rel="shortcut icon" href="{{ url_for('static', filename='images/default_star.svg') }}">
@@ -82,11 +83,50 @@
     <script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
     <script>
+        // [修复 P1-9] 全局 fetch 覆写：为所有写请求自动附加 X-CSRFToken 头
+        (function() {
+            const _origFetch = window.fetch;
+            window.fetch = function(input, init) {
+                init = init || {};
+                try {
+                    const method = String(init.method || (input instanceof Request ? input.method : 'GET') || 'GET').toUpperCase();
+                    if (method !== 'GET' && method !== 'HEAD') {
+                        const headers = new Headers(init.headers || {});
+                        if (!headers.has('X-CSRFToken')) {
+                            const meta = document.querySelector('meta[name="csrf-token"]');
+                            if (meta) headers.set('X-CSRFToken', meta.content);
+                        }
+                        init.headers = headers;
+                    }
+                } catch (e) { /* 保持原生行为 */ }
+                return _origFetch.call(this, input, init);
+            };
+        })();
+
         document.addEventListener("DOMContentLoaded", function() {
             window.sysConfirm = function(msg, cb) {
                 document.getElementById('sysConfirmMessage').innerText = msg;
                 const m = new bootstrap.Offcanvas(document.getElementById('sysConfirmSheet'));
                 document.getElementById('sysConfirmBtn').onclick = function() { m.hide(); if(cb) cb(); }; m.show();
+            };
+
+            // [修复 P1-9] 写操作统一走 POST：原 GET 链接式变更（toggle/delete 等）改为提交 POST 请求
+            window.postAction = function(url, confirmMsg) {
+                const doIt = function() {
+                    fetch(url, { method: 'POST' }).then(function(res) {
+                        if (res.status === 403) { alert('安全校验失败(CSRF)，请刷新页面后重试'); return; }
+                        if (res.redirected) { window.location.href = res.url; return; }
+                        const ct = res.headers.get('content-type') || '';
+                        if (ct.indexOf('application/json') >= 0) {
+                            return res.json().then(function(d) {
+                                if (d && d.status === 'error') alert(d.msg || '操作失败');
+                                else window.location.reload();
+                            });
+                        }
+                        window.location.reload();
+                    }).catch(function() { window.location.reload(); });
+                };
+                if (confirmMsg) window.sysConfirm(confirmMsg, doIt); else doIt();
             };
 
             document.addEventListener('click', function(e) {

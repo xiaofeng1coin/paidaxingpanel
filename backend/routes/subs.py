@@ -6,10 +6,13 @@ from flask import request, redirect, url_for, jsonify
 from flask_login import login_required
 from backend.models import db, Subscription, Task
 from backend.core.template import render_template
+from backend.core.proc_utils import kill_process_tree
+from backend.core.file_utils import read_text_tail
+from backend.core.task_helpers import validate_alias
 from backend.extensions import scheduler
 from backend.runtime import running_processes
 from backend.services.executors import execute_subscription
-from backend.core.paths import SCRIPTS_DIR, CUSTOM_OVERRIDE_DIR
+from backend.core.paths import SCRIPTS_DIR, CUSTOM_OVERRIDE_DIR, LOGS_DIR
 from backend.core.security import get_safe_path
 
 def init_app(app, add_sub_job_to_scheduler):
@@ -28,7 +31,10 @@ def init_app(app, add_sub_job_to_scheduler):
         alias = data.get('alias', '').strip()
         if not alias:
             alias = f"sub_{int(time.time())}"
-        
+        # [修复 P1-7] 别名作为 git clone 目标目录名，必须严格校验，否则可写穿 scripts 目录
+        if not validate_alias(alias):
+            return jsonify({"status": "error", "msg": "订阅别名只能包含字母、数字、下划线、中划线（长度1-50）"})
+
         new_sub = Subscription(
             name=data.get('name'),
             type=data.get('type', 'public_repo'),
@@ -54,15 +60,19 @@ def init_app(app, add_sub_job_to_scheduler):
     @app.route('/api/subs/edit/<int:id>', methods=['POST'])
     @login_required
     def api_subs_edit(id):
-        sub = Subscription.query.get(id)
+        sub = db.session.get(Subscription, id)
         if not sub:
             return jsonify({"status": "error", "msg": "订阅不存在"})
         data = request.json
-        
+        # [修复 P1-7] 编辑时同样校验别名格式
+        new_alias = (data.get('alias') or '').strip() or sub.alias
+        if not validate_alias(new_alias):
+            return jsonify({"status": "error", "msg": "订阅别名只能包含字母、数字、下划线、中划线（长度1-50）"})
+
         sub.name = data.get('name')
         sub.type = data.get('type', 'public_repo')
         sub.url = data.get('url')
-        sub.alias = data.get('alias', '').strip() or sub.alias
+        sub.alias = new_alias
         sub.branch = data.get('branch', '')
         sub.cron = data.get('cron', data.get('schedule', ''))
         sub.whitelist = data.get('whitelist', '')
@@ -76,10 +86,10 @@ def init_app(app, add_sub_job_to_scheduler):
         add_sub_job_to_scheduler(sub)
         return jsonify({"status": "success"})
 
-    @app.route('/api/subs/toggle/<int:id>')
+    @app.route('/api/subs/toggle/<int:id>', methods=['POST'])
     @login_required
     def api_subs_toggle(id):
-        sub = Subscription.query.get(id)
+        sub = db.session.get(Subscription, id)
         if sub:
             sub.is_disabled = 1 if getattr(sub, 'is_disabled', 0) == 0 else 0
             db.session.commit()
@@ -90,28 +100,28 @@ def init_app(app, add_sub_job_to_scheduler):
                 add_sub_job_to_scheduler(sub)
         return redirect(url_for('subs'))
 
-    @app.route('/api/subs/run/<int:id>')
-    @login_required
-    def api_subs_run(id):
-        sub = Subscription.query.get(id)
+    # [修复 P2-21] run 与 sync 原为完全重复的两套代码，sync 收敛为对 run 的内部委托
+    def _submit_sub_run(id):
+        sub = db.session.get(Subscription, id)
         if not sub:
             return jsonify({"status": "error", "msg": "订阅不存在"})
         threading.Thread(target=execute_subscription, args=(app, id, True)).start()
         return jsonify({"status": "success", "msg": "同步任务已提交"})
+
+    @app.route('/api/subs/run/<int:id>', methods=['POST'])
+    @login_required
+    def api_subs_run(id):
+        return _submit_sub_run(id)
 
     @app.route('/api/subs/sync/<int:id>', methods=['POST'])
     @login_required
     def api_subs_sync(id):
-        sub = Subscription.query.get(id)
-        if not sub:
-            return jsonify({"status": "error", "msg": "订阅不存在"})
-        threading.Thread(target=execute_subscription, args=(app, id, True)).start()
-        return jsonify({"status": "success", "msg": "同步任务已提交"})
+        return _submit_sub_run(id)
 
-    @app.route('/api/subs/delete/<int:id>')
+    @app.route('/api/subs/delete/<int:id>', methods=['POST'])
     @login_required
     def api_subs_delete(id):
-        sub = Subscription.query.get(id)
+        sub = db.session.get(Subscription, id)
         if sub:
             if scheduler.get_job(f"sub_{sub.id}"):
                 scheduler.remove_job(f"sub_{sub.id}")
@@ -119,10 +129,10 @@ def init_app(app, add_sub_job_to_scheduler):
             db.session.commit()
         return redirect(url_for('subs'))
 
-    @app.route('/api/subs/delete_tasks/<int:id>')
+    @app.route('/api/subs/delete_tasks/<int:id>', methods=['POST'])
     @login_required
     def api_subs_delete_tasks(id):
-        sub = Subscription.query.get(id)
+        sub = db.session.get(Subscription, id)
         if sub:
             if sub.type == 'single_file':
                 tasks = Task.query.filter(Task.command.like(f"single_scripts/{sub.alias}.%")).all()
@@ -131,7 +141,7 @@ def init_app(app, add_sub_job_to_scheduler):
                     if file_path and os.path.exists(file_path):
                         try:
                             os.remove(file_path)
-                        except:
+                        except OSError:
                             pass
             else:
                 tasks = Task.query.filter(Task.command.like(f"{sub.alias}/%")).all()
@@ -139,35 +149,33 @@ def init_app(app, add_sub_job_to_scheduler):
                 if target_dir and os.path.exists(target_dir) and os.path.isdir(target_dir):
                     try:
                         shutil.rmtree(target_dir, ignore_errors=True)
-                    except:
+                    except OSError:
                         pass
 
             for task in tasks:
                 if task.id in running_processes:
-                    try:
-                        running_processes[task.id].kill()
-                    except:
-                        pass
+                    # [修复 P1-4] 终止整棵进程树
+                    kill_process_tree(running_processes.pop(task.id, None))
                 if scheduler.get_job(f"task_{task.id}"):
                     scheduler.remove_job(f"task_{task.id}")
                 db.session.delete(task)
-                
+
             db.session.commit()
         return redirect(url_for('subs'))
 
     @app.route('/api/subs/log/<int:id>')
     @login_required
     def api_subs_log(id):
-        log_file_path = os.path.join(__import__('backend.core.paths', fromlist=['LOGS_DIR']).LOGS_DIR, 'subscriptions', f"sub_{id}.log")
+        log_file_path = os.path.join(LOGS_DIR, 'subscriptions', f"sub_{id}.log")
         if os.path.exists(log_file_path):
-            with open(log_file_path, 'r', encoding='utf-8') as f:
-                return jsonify({"content": f.read()})
+            # [修复 P2-5] 日志过大时只返回末尾内容
+            return jsonify({"content": read_text_tail(log_file_path)})
         return jsonify({"content": "暂无日志或尚未执行过..."})
 
     @app.route('/api/subs/override_info/<int:id>')
     @login_required
     def api_subs_override_info(id):
-        sub = Subscription.query.get(id)
+        sub = db.session.get(Subscription, id)
         if not sub:
             return jsonify({"status": "error", "msg": "订阅不存在"})
 
@@ -211,6 +219,11 @@ def init_app(app, add_sub_job_to_scheduler):
             else:
                 alias = repo_name.split('.')[0] if repo_name else f"sub_{int(time.time())}"
             alias = alias or f"sub_{int(time.time())}"
+        # [修复 P1-7] 兼容路由的别名同样做格式校验与净化
+        from backend.core.task_helpers import sanitize_task_name
+        alias = sanitize_task_name(alias.replace('/', '_').replace('\\', '_'), f"sub_{int(time.time())}").replace('.', '_')
+        if not validate_alias(alias):
+            alias = f"sub_{int(time.time())}"
 
         type_value = form.get('type', 'repo')
         db_type = 'public_repo' if type_value == 'repo' else 'single_file'
@@ -240,7 +253,7 @@ def init_app(app, add_sub_job_to_scheduler):
     @app.route('/subs/edit/<int:id>', methods=['POST'])
     @login_required
     def subs_edit_compat(id):
-        sub = Subscription.query.get(id)
+        sub = db.session.get(Subscription, id)
         if not sub:
             return redirect(url_for('subs'))
 
@@ -257,13 +270,13 @@ def init_app(app, add_sub_job_to_scheduler):
         add_sub_job_to_scheduler(sub)
         return redirect(url_for('subs', page=request.form.get('page', 1)))
 
-    @app.route('/subs/delete/<int:id>')
+    @app.route('/subs/delete/<int:id>', methods=['POST'])
     @login_required
     def subs_delete_compat(id):
-        sub = Subscription.query.get(id)
+        sub = db.session.get(Subscription, id)
         if sub:
             if scheduler.get_job(f"sub_{sub.id}"):
                 scheduler.remove_job(f"sub_{sub.id}")
             db.session.delete(sub)
             db.session.commit()
-        return redirect(url_for('subs', page=request.args.get('page', 1)))
+        return redirect(url_for('subs', page=request.values.get('page', 1)))

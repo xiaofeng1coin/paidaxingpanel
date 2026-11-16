@@ -57,6 +57,7 @@
 </div>
 
 <form id="saveForm" method="POST" style="display:none;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="filename" value="{{ current_file }}">
     <textarea name="content" id="hiddenContent"></textarea>
 </form>

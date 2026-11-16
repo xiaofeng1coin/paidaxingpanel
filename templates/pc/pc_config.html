@@ -16,6 +16,7 @@
 
 <!-- 给 form 设置了 id，并且移除了内层的多余 div 间距 -->
 <form id="configForm" method="POST" action="/config" class="d-flex flex-column" style="height: calc(100vh - 120px);">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="editor-wrapper flex-grow-1 mb-0">
         <textarea name="config_content" class="form-control code-textarea h-100 w-100" spellcheck="false" placeholder="# 输入您的全局配置...">{{ config_content }}</textarea>
     </div>

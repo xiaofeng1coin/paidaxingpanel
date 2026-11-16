@@ -8,7 +8,7 @@
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/pc/pc_login.css') }}" rel="stylesheet">
 </head>
-<body oncontextmenu="return false;" onkeydown="if(event.keyCode==123 || (event.ctrlKey&&event.shiftKey&&(event.keyCode==73||event.keyCode==74)) || (event.ctrlKey&&event.keyCode==85)){return false;}">
+<body>
     <div class="login-wrapper">
         <div class="login-card">
 
@@ -27,6 +27,7 @@
             {% endwith %}
 
             <form method="POST" action="/login">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {% if need_2fa %}
                     <div class="text-center mb-4">
                         <div class="logo-box" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); box-shadow: 0 8px 16px rgba(16, 185, 129, 0.25);">
@@ -36,8 +37,8 @@
                         <div class="login-subtitle">为保障安全，请输入安全验证码</div>
                     </div>
 
-                    <input type="hidden" name="username" value="{{ temp_user }}">
-                    <input type="hidden" name="password" value="{{ temp_pwd }}">
+                    <!-- [加固 P1-1] 第二步仅提交动态码：待验证用户保存在服务端 session，
+                         不再经由前端隐藏域回传密码（密码验证已在第一步完成） -->
 
                     <div class="mb-4">
                         <input type="text" id="totpInput" name="totp_code" class="form-control totp-input" placeholder="输入 6 位动态数字" autocomplete="off" autofocus required maxlength="6">

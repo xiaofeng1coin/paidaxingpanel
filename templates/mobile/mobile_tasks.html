@@ -72,8 +72,8 @@
             <div class="action-group">
                 <button class="btn-action" onclick="toggleTerminal({{ task.id }})"><i class="bi bi-card-text me-1"></i>日志</button>
                 <button class="btn-action" onclick='openEditTaskModal({{ task.id }}, {{ task.name | tojson }}, {{ task.command | tojson }}, {{ task.cron | tojson }})'><i class="bi bi-pencil-square me-1"></i>编辑</button>
-                <a class="btn-action" href="/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
-                <button class="btn-action text-danger" onclick="if(confirm('删除此任务？')) window.location.href='/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}'"><i class="bi bi-trash3 me-1"></i>删除</button>
+                <a class="btn-action" href="javascript:void(0);" onclick="postAction('/api/task/toggle/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}')">{% if task.is_disabled == 1 %}<i class="bi bi-play-circle me-1"></i>启用{% else %}<i class="bi bi-slash-circle me-1"></i>禁用{% endif %}</a>
+                <button class="btn-action text-danger" onclick="postAction('/task/delete/{{ task.id }}?page={{ pagination.page }}&per_page={{ per_page }}&status={{ status_filter if source_filter == 'all' else 'all' }}&source={{ source_filter }}{% if keyword %}&keyword={{ keyword }}{% endif %}', '删除此任务？')"><i class="bi bi-trash3 me-1"></i>删除</button>
             </div>
 
             <div class="inline-terminal" id="term-{{ task.id }}">
@@ -122,6 +122,7 @@
 <div class="modal fade" id="addTaskModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered mx-3">
         <form class="modal-content border-0 rounded-4" method="POST" action="/task/add">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="page" value="{{ pagination.page }}">
             <input type="hidden" name="per_page" value="{{ per_page }}">
             <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
@@ -146,6 +147,7 @@
 <div class="modal fade" id="editTaskModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered mx-3">
         <form class="modal-content border-0 rounded-4" id="editTaskForm" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="page" value="{{ pagination.page }}">
             <input type="hidden" name="per_page" value="{{ per_page }}">
             <input type="hidden" name="status" value="{{ status_filter if source_filter == 'all' else 'all' }}">
@@ -234,13 +236,15 @@
         document.getElementById('taskViewTip').style.display = 'none';
         fetch('/api/task_views').then(res => res.json()).then(data => {
             if (data.status !== 'success') return;
+            // [加固 P3-23] 名称等文本插入 innerHTML 前先做 HTML 转义
+            const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
             const list = document.getElementById('taskViewList');
             list.innerHTML = '';
             data.data.forEach(item => {
                 list.innerHTML += `
                     <div class="d-flex justify-content-between align-items-center px-3 py-3 border-bottom bg-white">
                         <div>
-                            <div class="fw-bold text-dark">${item.name}</div>
+                            <div class="fw-bold text-dark">${esc(item.name)}</div>
                             <div class="text-muted small">${item.source_type === 'manual' ? '单脚本' : '订阅'}</div>
                         </div>
                         <div class="form-check form-switch m-0">
@@ -297,7 +301,7 @@
         if(!termBox.classList.contains('open')) { toggleTerminal(id); }
         
         document.getElementById(`term-body-${id}`).innerText = '执行中...\n';
-        fetch(`/api/task/run/${id}`).then(r=>r.json()).then(data => {
+        fetch(`/api/task/run/${id}`, { method: 'POST' }).then(r=>r.json()).then(data => {
             if (data.status === 'success') {
                 const ring = document.getElementById(`ring-${id}`);
                 const quickWrap = document.getElementById(`quick-action-${id}`);
@@ -322,7 +326,7 @@
 
     function stopTask(id) {
         window.sysConfirm('确认停止？', () => {
-            fetch(`/api/task/stop/${id}`).then(r => r.json()).then(data => {
+            fetch(`/api/task/stop/${id}`, { method: 'POST' }).then(r => r.json()).then(data => {
                 if (data.status === 'success') {
                     const ring = document.getElementById(`ring-${id}`);
                     const quickWrap = document.getElementById(`quick-action-${id}`);

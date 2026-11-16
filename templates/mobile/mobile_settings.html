@@ -34,7 +34,7 @@
 </div>
 
 <div class="setting-group">
-    <a href="/api/settings/backup" class="setting-item">
+    <a href="/api/settings/backup" class="setting-item" onclick="setTimeout(function(){ alert('备份包包含全部数据（环境变量、Cookie 等敏感信息为明文），请妥善保管，勿分享给他人。'); }, 800)">
         <div><i class="bi bi-cloud-download item-icon text-info"></i> 数据备份</div>
         <i class="bi bi-chevron-right text-muted"></i>
     </a>
@@ -54,15 +54,22 @@
 <div class="modal fade" id="securityModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered mx-3">
         <form class="modal-content border-0 rounded-4" method="POST" action="/settings/security">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <div class="modal-header border-0 pb-0">
                 <h6 class="modal-title fw-bold">账号安全</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <label class="text-muted small mb-1 fw-bold">用户名</label>
+                <label class="text-muted small mb-1 fw-bold">当前密码 (验证身份)</label>
+                <input type="password" name="current_password" class="tech-input font-monospace" required autocomplete="current-password">
+                <label class="text-muted small mb-1 fw-bold mt-2">用户名</label>
                 <input type="text" name="username" class="tech-input font-monospace" value="{{ current_user.username }}" required>
-                <label class="text-muted small mb-1 fw-bold mt-2">密码 (留空表示不修改)</label>
+                <label class="text-muted small mb-1 fw-bold mt-2">新密码 (留空表示不修改，不少于 8 位)</label>
                 <input type="password" name="password" class="tech-input font-monospace" placeholder="新密码">
+                {% if config.get('totp_secret') %}
+                <label class="text-muted small mb-1 fw-bold mt-2">两步验证码</label>
+                <input type="text" name="totp_code" class="tech-input font-monospace" maxlength="6" autocomplete="one-time-code">
+                {% endif %}
             </div>
             <div class="modal-footer border-0 pt-0">
                 <button type="submit" class="btn btn-dark w-100 py-3 rounded-3 fw-bold">保存配置</button>
@@ -75,6 +82,7 @@
 <div class="modal fade" id="notifyModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable mx-3">
         <form class="modal-content border-0 rounded-4" method="POST" action="/settings/config">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tab" value="security">
             <div class="modal-header border-0 pb-0">
                 <h6 class="modal-title fw-bold">消息推送</h6>

@@ -7,7 +7,7 @@ import logging
 import traceback
 from werkzeug.security import generate_password_hash
 from backend.core.paths import DATA_DIR, BASE_DIR
-from backend.models import db, User, LoginSecurity
+from backend.models import db, User, LoginSecurity, SystemConfig
 
 def ensure_login_security():
     sec = LoginSecurity.query.first()
@@ -38,13 +38,22 @@ def run_cli():
             return True
 
         if cmd == 'resetuser':
-            if len(sys.argv) < 4:
+            if len(sys.argv) < 3:
                 print("❌ 用法错误")
-                print("正确用法: pdx resetuser 用户名 密码")
+                print("正确用法: pdx resetuser 用户名 [密码]")
+                print("（不提供密码参数时进入隐藏输入模式）")
                 sys.exit(1)
 
             new_username = sys.argv[2]
-            new_password = sys.argv[3]
+            if len(sys.argv) >= 4:
+                new_password = sys.argv[3]
+            else:
+                # [加固 P3-32] 密码改用隐藏输入，避免出现在进程列表与命令历史中
+                import getpass
+                new_password = getpass.getpass("请输入新密码: ")
+                if not new_password:
+                    print("❌ 密码不能为空")
+                    sys.exit(1)
 
             user = User.query.order_by(User.id.asc()).first()
             if not user:
@@ -53,6 +62,12 @@ def run_cli():
 
             user.username = new_username
             user.password_hash = generate_password_hash(new_password)
+            # [加固] 重置凭据时顺带清除两步验证：防止管理员忘记动态码被永久卡在登录页
+            totp_cfg = SystemConfig.query.filter_by(key='totp_secret').first()
+            if totp_cfg:
+                db.session.delete(totp_cfg)
+            # [加固] 递增凭据版本：使所有旧会话失效
+            user.cred_version = (user.cred_version or 0) + 1
 
             sec = ensure_login_security()
             sec.failed_count = 0
@@ -136,7 +151,7 @@ if __name__ == '__main__':
                     if image.size != (64, 64):
                         image = image.resize((64, 64), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.ANTIALIAS)
                     return image
-            except:
+            except Exception:
                 pass
             image = Image.new('RGB', (64, 64), color=(37, 99, 235))
             draw = ImageDraw.Draw(image)
@@ -154,4 +169,17 @@ if __name__ == '__main__':
         logging.debug("拉起 webview 主窗口...")
         webview.start()
     else:
-        socketio.run(app, host='0.0.0.0', port=5000)
+        # [加固 P2-8] 支持通过系统配置 listen_host 自定义监听地址（默认保持 0.0.0.0 兼容现有部署）；
+        # 面板使用 HTTP 明文协议，暴露于局域网/公网时建议置于反向代理 + TLS 之后
+        listen_host = '0.0.0.0'
+        try:
+            with app.app_context():
+                from backend.models import SystemConfig as _SysCfg
+                _cfg = _SysCfg.query.filter_by(key='listen_host').first()
+                if _cfg and (_cfg.value or '').strip():
+                    listen_host = _cfg.value.strip()
+        except Exception:
+            pass
+        # [修复 P1-6] flask-socketio 5.3.6 在 stdin 非 TTY（Docker/nohup/服务方式启动）时
+        # 会因"生产环境安全检查"抛 RuntimeError 直接退出；本面板使用 threading 模式属于预期用法，显式放行。
+        socketio.run(app, host=listen_host, port=5000, allow_unsafe_werkzeug=True)
