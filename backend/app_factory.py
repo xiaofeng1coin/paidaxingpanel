@@ -1,10 +1,17 @@
 import os
+import sys
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import timedelta
-from flask import Flask, request, redirect, url_for, flash, session
+from urllib.parse import urlparse
+from flask import Flask, request, redirect, url_for, flash, session, jsonify
+from sqlalchemy import event as sa_event
+from sqlalchemy.engine import Engine
 from backend.models import db, User, SystemConfig
 from backend.extensions import socketio, login_manager
-from backend.core.paths import DB_DIR, VERSION_FILE, APP_SECRET_KEY, INSTANCE_COOKIE_SUFFIX
+from backend.core.paths import DB_DIR, VERSION_FILE, APP_SECRET_KEY, INSTANCE_COOKIE_SUFFIX, DATA_DIR
+from backend.core.config_cache import get_all_configs
+from backend.core.csrf import get_csrf_token, before_request_csrf
 from backend.runtime import SUBPROCESS_KWARGS
 
 logging.basicConfig(
@@ -15,8 +22,37 @@ logging.basicConfig(
 aps_logger = logging.getLogger('apscheduler')
 aps_logger.setLevel(logging.DEBUG)
 
+# [修复 P2-26] 统一文件日志：源码模式原先只有控制台输出，EXE 模式的日志初始化又散在 app.py 里；
+# 现在所有模式统一在应用工厂初始化轮转日志（5MB x 3）。
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    _panel_log_path = os.path.join(DATA_DIR, 'panel.log')
+    _panel_handler = RotatingFileHandler(_panel_log_path, maxBytes=5 * 1024 * 1024,
+                                         backupCount=3, encoding='utf-8')
+    _panel_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(name)s: %(message)s'))
+    logging.getLogger().addHandler(_panel_handler)
+except Exception:
+    logging.getLogger().warning("轮转日志初始化失败（数据目录不可写？），仅保留控制台日志")
+
 if os.name == 'nt':
     SUBPROCESS_KWARGS['creationflags'] = 0x08000000
+else:
+    # [修复 P1-4 配套] POSIX 下以独立进程组启动子进程，配合 kill_process_tree 精确终止整棵进程树
+    SUBPROCESS_KWARGS['start_new_session'] = True
+
+# [修复 P2-12] SQLite 开启 WAL 与 NORMAL 同步模式，
+# 缓解调度器/队列/请求/执行线程多线程并发写导致的 database is locked
+@sa_event.listens_for(Engine, 'connect')
+def _set_sqlite_pragma(dbapi_conn, conn_record):
+    if type(dbapi_conn).__module__ == 'sqlite3' or type(dbapi_conn).__name__ == 'SQLite3CursorWrapper':
+        try:
+            cur = dbapi_conn.cursor()
+            cur.execute('PRAGMA journal_mode=WAL')
+            cur.execute('PRAGMA synchronous=NORMAL')
+            cur.execute('PRAGMA busy_timeout=30000')
+            cur.close()
+        except Exception:
+            pass
 
 app = Flask(
     __name__,
@@ -47,9 +83,15 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_NAME'] = f"patrickpanel_session_{INSTANCE_COOKIE_SUFFIX}"
 app.config['SESSION_COOKIE_PATH'] = '/'
-app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
+# [加固 P3-19] 上传总量上限 1GB → 256MB（覆盖最大场景：备份还原；脚本上传另有 10MB 校验）
+app.config['MAX_CONTENT_LENGTH'] = 256 * 1024 * 1024
 
 db.init_app(app)
+
+# 建表必须同步在主线程完成：原先 db.create_all() 放在调度器后台线程里，
+# 面板刚启动时访问会撞上"表未建"的 500 竞态。
+with app.app_context():
+    db.create_all()
 
 socketio.init_app(app)
 
@@ -66,7 +108,8 @@ def handle_ws_connect():
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    # [修复 P2-24] 使用 SQLAlchemy 2.0 推荐的 session.get 替代 legacy Query.get
+    return db.session.get(User, int(user_id))
 
 
 @app.context_processor
@@ -78,9 +121,10 @@ def inject_global_settings():
     try:
         from flask_login import current_user
         if current_user.is_authenticated or request.endpoint == 'login':
-            configs = {c.key: c.value for c in SystemConfig.query.all()}
-            sys_theme = configs.get('theme', 'auto')
-            sys_lang = configs.get('language', 'auto')
+            # [修复 P2-11] SystemConfig 全表查询改为带 TTL 的内存缓存
+            configs = get_all_configs(app)
+            sys_theme = configs.get('theme', 'auto') or 'auto'
+            sys_lang = configs.get('language', 'auto') or 'auto'
             if current_user.is_authenticated and 'last_login_info' in session:
                 last_login = session.pop('last_login_info', None)
 
@@ -88,36 +132,52 @@ def inject_global_settings():
             with open(VERSION_FILE, 'r', encoding='utf-8') as f:
                 import json
                 sys_version = json.load(f).get('version', '1.0.0')
-    except:
+    except Exception:
         pass
-    return dict(sys_theme=sys_theme, sys_lang=sys_lang, last_login_info=last_login, sys_version=sys_version)
+    return dict(
+        sys_theme=sys_theme, sys_lang=sys_lang, last_login_info=last_login,
+        sys_version=sys_version, csrf_token=get_csrf_token()
+    )
 
 
 @app.before_request
 def global_security_check():
+    # [加固 P2-7] Host 头校验（DNS Rebinding 防护）：
+    # EXE 模式仅监听 127.0.0.1，合法 Host 只能是本机回环地址；
+    # 恶意网页把自有域名解析到 127.0.0.1 后，浏览器将带着恶意域名的 Host 访问面板——直接拒绝。
+    # 源码/手机模式监听 0.0.0.0，访问来源地址不可预知，不做此校验。
+    if getattr(sys, 'frozen', False) and not request.path.startswith('/static/'):
+        try:
+            hostname = urlparse(f"http://{request.host}").hostname
+        except Exception:
+            hostname = None
+        if hostname not in ('127.0.0.1', 'localhost', '::1'):
+            return "拒绝访问：Host 头校验失败", 403
+
+    # 未初始化时强制进入安装流程
     if not request.path.startswith('/static/'):
         if User.query.count() == 0 and request.endpoint not in ['install']:
             return redirect(url_for('install'))
 
-    session.modified = True
+    # [加固 P2-3] 凭据版本校验：改密后所有携带旧版本号的会话（含被盗的其他会话）立即失效
+    from flask_login import current_user as _cu
+    if _cu.is_authenticated and request.path.startswith('/static/') is False:
+        if session.get('cred_v') != (_cu.cred_version or 0):
+            from flask_login import logout_user
+            logout_user()
+            session.clear()
+            if request.path.startswith('/api/'):
+                return jsonify({"status": "expired"}), 401
+            return redirect(url_for('login'))
 
-    from flask_login import current_user
-    allowed_direct_endpoints = [
-        'login', 'install', 'logout', 'tasks', 'static', 'subs',
-        'scripts_editor', 'scripts_debug', 'api_debug_run', 'api_debug_stop', 'logs', 'deps', 'envs', 'config_editor', 'settings',
-        'api_delete_logs', 'api_task_batch', 'api_scripts_save', 'api_scripts_upload', 'api_update_check', 'api_update_do',
-        'api_subs_add', 'api_subs_edit', 'api_subs_delete', 'api_subs_run', 'api_subs_log', 'api_subs_delete_tasks', 'api_subs_toggle',
-        'get_avatar', 'api_restore_backup', 'api_task_views', 'api_task_views_toggle',
-        'app_tasks', 'app_envs', 'app_env_action',
-        # 👇 关键修复：把所有对任务、变量的增删改查和日志抓取 API 全加上，不再踢回登录页
-        'api_run_task', 'api_stop_task', 'api_get_task_log', 'add_task', 'edit_task', 'toggle_task', 'delete_task',
-        'reorder_envs', 'edit_env', 'toggle_env', 'delete_env', 'app_scripts', 'app_script_read', 'app_config_read', 'app_config_save', 'app_security_save','app_sysconfig', 'app_sysconfig_save', 'app_deps', 'app_dep_add', 'app_dep_del', 'app_syslogs', 'app_syslog_read','api_get_deps_log','app_subs', 'app_sub_action','api_subs_override_info', 'backup_data'
-    ]
-    if current_user.is_authenticated and request.method == 'GET' and request.endpoint not in allowed_direct_endpoints:
-        referer = request.headers.get("Referer")
-        if not referer or request.host not in referer:
-            flash("为保证安全，禁止直接输入地址访问未授权子页面，已退回首页。")
-            return redirect(url_for('tasks'))
+    # [修复 P1-9] CSRF 防护：已登录用户的全部写请求必须携带匹配的 token
+    csrf_result = before_request_csrf()
+    if csrf_result is not None:
+        return csrf_result
+
+    # [修复 P2-15] 拆除原"禁止直连地址"白名单机制：
+    # 该机制把几十个 API 端点全量放行、只拦 GET，几乎无防护价值且逻辑复杂，
+    # 站点安全职责已由 CSRF 校验(P1-9) + login_required + SameSite Cookie 承担。
 
 
 @app.after_request

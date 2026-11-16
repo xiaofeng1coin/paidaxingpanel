@@ -8,6 +8,8 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
+    # [加固] 凭据版本号：修改用户名/密码时递增，其余会话凭旧版本号自动失效
+    cred_version = db.Column(db.Integer, default=0)
 
 class LoginSecurity(db.Model):
     id = db.Column(db.Integer, primary_key=True)
