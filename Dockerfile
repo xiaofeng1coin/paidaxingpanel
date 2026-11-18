@@ -7,6 +7,7 @@ ENV TZ=Asia/Shanghai \
     FLASK_APP=app.py
 
 # 更新系统源并安装必需的基础工具，同时安装 Node.js 20.x LTS
+# （libnss3 等为 chrome-headless-shell 运行库，fonts-wqy-zenhei 为中文字体）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
@@ -14,6 +15,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cron \
     tzdata \
     gnupg \
+    fonts-wqy-zenhei \
+    libnss3 \
+    libnspr4 \
+    libglib2.0-0 \
+    libfontconfig1 \
+    libgbm1 \
+    libasound2 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libdbus-1-3 \
+    libexpat1 \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean \
